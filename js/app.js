@@ -46,10 +46,10 @@ const SLIDERS = {
 };
 
 const BUILTIN_PRESETS = [
-  { name: 'Natural', s: { con: 10, hi: -25, sh: 15, cla: 8, vib: 12, sharp: 15 } },
-  { name: 'Cálido evento', s: { temp: 12, con: 12, hi: -30, sh: 20, cla: 6, vib: 15, vig: -12, sharp: 15 } },
-  { name: 'Luminoso', s: { exp: 0.3, con: 5, hi: -40, sh: 30, wh: 10, vib: 10, sharp: 10 } },
-  { name: 'Salón oscuro', s: { exp: 0.5, con: 8, hi: -35, sh: 40, bl: -8, cla: 10, vib: 10, temp: -4, sharp: 15 } },
+  { name: 'Natural', s: { con: 6, hi: -12, sh: 10, cla: 5, vib: 8, sharp: 10 } },
+  { name: 'Cálido evento', s: { temp: 10, con: 8, hi: -15, sh: 14, cla: 4, vib: 12, vig: -8, sharp: 10 } },
+  { name: 'Luminoso', s: { exp: 0.2, con: 4, hi: -18, sh: 20, wh: 6, vib: 8, sharp: 8 } },
+  { name: 'Salón oscuro', s: { exp: 0.35, con: 6, hi: -20, sh: 28, bl: -5, cla: 7, vib: 8, temp: -3, sharp: 10 } },
   { name: 'Blanco y negro', s: { bw: true, con: 25, hi: -20, sh: 10, cla: 15, sharp: 15 } },
 ];
 
@@ -505,7 +505,15 @@ document.addEventListener('pointermove', (e) => {
   const p = cur(), m = p?.s.masks?.[maskDrag.i]; if (!m) return;
   const dx = e.clientX - maskDrag.x, dy = e.clientY - maskDrag.y, r = maskDrag.rect;
   if (maskDrag.type === 'move') { m.x = Math.max(0, Math.min(1, maskDrag.original.x + dx / r.width)); m.y = Math.max(0, Math.min(1, maskDrag.original.y - dy / r.height)); }
-  else if (maskDrag.type === 'resize') { m.w = Math.max(.04, Math.min(.8, maskDrag.original.w + dx / (2*r.width))); m.h = Math.max(.04, Math.min(.8, maskDrag.original.h + dy / (2*r.height))); }
+  else if (maskDrag.type === 'resize') {
+    // El tirador inferior derecho mantiene fijo el ángulo opuesto: el centro
+    // acompaña al cursor para que el óvalo no parezca moverse al revés.
+    const dw = dx / (2 * r.width), dh = dy / (2 * r.height);
+    m.w = Math.max(.04, Math.min(.8, maskDrag.original.w + dw));
+    m.h = Math.max(.04, Math.min(.8, maskDrag.original.h + dh));
+    m.x = Math.max(m.w, Math.min(1 - m.w, maskDrag.original.x + dw));
+    m.y = Math.max(m.h, Math.min(1 - m.h, maskDrag.original.y - dh));
+  }
   else { m.rotation = Math.atan2(e.clientY - r.top - r.height/2, e.clientX - r.left - r.width/2) + Math.PI/2; }
   renderMaskOverlay(); draw();
 });
@@ -658,9 +666,15 @@ function presetFrom(v) { return v[0] === 'b' ? BUILTIN_PRESETS[+v.slice(1)] : st
 $('preset-select').addEventListener('change', (e) => {
   const v = e.target.value; if (!v) return;
   const pr = presetFrom(v);
-  change((s) => { for (const k of TONE_KEYS) s[k] = DEFAULTS[k]; Object.assign(s, structuredClone(pr.s)); });
+  change((s) => { for (const k of TONE_KEYS) s[k] = structuredClone(DEFAULTS[k]); Object.assign(s, structuredClone(pr.s)); });
+  $('btn-preset-mix').disabled = false;
   $('btn-del-preset').hidden = v[0] !== 'u';
   toast(`Preset "${pr.name}" aplicado. Para usarlo en varias: seleccionalas y tocá Sincronizar.`, 3600);
+});
+$('btn-preset-mix').addEventListener('click', () => {
+  const pr = presetFrom($('preset-select').value); if (!pr) return;
+  change((s) => Object.assign(s, structuredClone(pr.s)));
+  toast(`Preset "${pr.name}" combinado con los ajustes actuales`);
 });
 $('btn-save-preset').addEventListener('click', () => {
   const p = cur(); if (!p) return;
@@ -939,6 +953,19 @@ $('btn-duplicate').addEventListener('click', () => {
   const p = cur(); if (!p) return;
   const copy = { ...p, i: state.photos.length, name: p.name.replace(/(\.[^.]+)$/, '-copia$1'), key: `${p.key}|copy|${Date.now()}`, s: structuredClone(p.s), hist: [], thumbUrl: null };
   state.photos.push(copy); state.sel = new Set([copy.i]); state.anchor = copy.i; buildStrip(); selectPhoto(copy.i); toast('Foto duplicada en la sesión');
+});
+$('btn-remove-photo').addEventListener('click', () => {
+  const p = cur();
+  if (!p) return;
+  if (state.photos.length <= 1) return toast('No se puede quitar la última foto de la sesión');
+  if (p.thumbUrl) URL.revokeObjectURL(p.thumbUrl);
+  const preview = state.previews.get(p.key);
+  preview?.close?.(); state.previews.delete(p.key);
+  state.photos.splice(state.cur, 1);
+  state.photos.forEach((photo, i) => { photo.i = i; });
+  state.cur = Math.min(state.cur, state.photos.length - 1);
+  state.sel = new Set([state.cur]); state.anchor = state.cur; state.selectedMask = -1;
+  buildStrip(); selectPhoto(state.cur); toast('Foto quitada de la sesión (no se borró del disco)');
 });
 $('btn-guides').addEventListener('click', () => { $('viewport').classList.toggle('guides'); $('btn-guides').classList.toggle('on'); });
 $('btn-red-eye').addEventListener('click', () => {
