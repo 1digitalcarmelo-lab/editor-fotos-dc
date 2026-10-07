@@ -6,12 +6,17 @@
 <title>Revelado DC · Editor de fotos por lote</title>
 <meta name="description" content="Editá cientos de fotos de un evento en el navegador: luces, sombras, color, presets y exportación por lote. Las fotos no se suben a ningún lado.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='30' fill='%2314122b'/%3E%3Ccircle cx='32' cy='32' r='16' fill='none' stroke='%23e2b866' stroke-width='5'/%3E%3Ccircle cx='32' cy='32' r='6' fill='%23e2b866'/%3E%3C/svg%3E">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#15142a">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
 <link rel="stylesheet" href="css/app.css">
 </head>
 <body>
 <header class="top">
   <div class="brand"><span class="mark" aria-hidden="true"></span><div><b>Revelado DC</b><small>Editor de fotos por lote</small></div></div>
   <div class="top-actions">
+    <button class="btn ghost" id="btn-install" hidden title="Instalarlo en la compu, con ícono propio">⊕ Instalar</button>
+    <button class="btn ghost" id="btn-backup" title="Copia de seguridad de tus ediciones">💾 Copia de ajustes</button>
     <button class="btn" id="btn-resume" hidden>↺ Seguir con la última carpeta</button>
     <button class="btn" id="btn-folder">📁 Abrir carpeta</button>
     <button class="btn ghost" id="btn-files">Elegir fotos</button>

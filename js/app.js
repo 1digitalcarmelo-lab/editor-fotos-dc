@@ -70,9 +70,75 @@ async function openFolder() {
   if (!window.showDirectoryPicker) { $('file-input').click(); return; }
   toast('Elegí la CARPETA de las fotos y tocá "Seleccionar carpeta". En esa ventana las fotos no se ven: es normal.', 6000);
   try {
-    const dir = await window.showDirectoryPicker({ id: 'revelado-fotos', mode: 'read' });
+    // Permiso de escritura: para guardar en esa carpeta el archivo con tus ajustes (las fotos no se tocan)
+    const dir = await window.showDirectoryPicker({ id: 'revelado-fotos', mode: 'readwrite' });
     await loadFromDir(dir);
   } catch (e) { if (e.name !== 'AbortError') toast('No se pudo abrir la carpeta.'); }
+}
+
+// ---------------------------------------------------------------- copia de ajustes en la carpeta
+// Como el .xmp de Lightroom: un archivo chico junto a las fotos con todas las ediciones.
+// Si se borra el caché del navegador, al volver a abrir la carpeta los ajustes vuelven.
+const SIDE = 'revelado-dc-ajustes.json';
+const portableKey = (p) => `${p.name}|${p.file.size}`;
+async function readSidecar(dir) {
+  try {
+    const fh = await dir.getFileHandle(SIDE);
+    const data = JSON.parse(await (await fh.getFile()).text());
+    return data && data.photos ? data.photos : {};
+  } catch { return {}; }
+}
+function sidecarData() {
+  const photos = {};
+  for (const p of state.photos) if (isEdited(p.s)) photos[portableKey(p)] = p.s;
+  return { app: 'Revelado DC', version: 1, saved: new Date().toISOString(), photos };
+}
+let sideT = 0;
+function scheduleSidecar() {
+  if (!state.dir) return;
+  clearTimeout(sideT);
+  sideT = setTimeout(async () => {
+    try {
+      if ((await state.dir.queryPermission({ mode: 'readwrite' })) !== 'granted') return;
+      const fh = await state.dir.getFileHandle(SIDE, { create: true });
+      const w = await fh.createWritable();
+      await w.write(JSON.stringify(sidecarData()));
+      await w.close();
+    } catch (e) { console.warn('No se pudo guardar la copia de ajustes', e); }
+  }, 1500);
+}
+function mergeAdjustments(map) {
+  let n = 0;
+  for (const p of state.photos) {
+    const s = map[portableKey(p)] || map[p.name];
+    if (s) { p.s = Object.assign(freshSettings(), s); save(p, false); n++; }
+  }
+  return n;
+}
+function openBackup() {
+  const hasDir = !!state.dir;
+  modal(`<h2>Copia de tus ajustes</h2>
+    <p class="muted">${hasDir ? `Tus ediciones se guardan solas en el archivo <b>${SIDE}</b>, dentro de la carpeta de las fotos. Si borrás el caché, al abrir la carpeta de nuevo vuelven.` : 'Abriste las fotos sin elegir la carpeta, así que los ajustes quedan solo en este navegador. Descargá una copia por las dudas, o abrilas con "Abrir carpeta" para que se guarden solos.'}</p>
+    <div class="opts">
+      <button class="btn" id="bk-down" ${state.photos.length ? '' : 'disabled'}>⇩ Descargar copia de ajustes (.json)</button>
+      <button class="btn ghost" id="bk-up" ${state.photos.length ? '' : 'disabled'}>⇧ Cargar una copia guardada</button>
+      <input type="file" id="bk-file" accept=".json,application/json" hidden>
+    </div>
+    <div class="modal-actions"><button class="btn gold" data-close>Cerrar</button></div>`);
+  $('bk-down').onclick = () => {
+    const url = URL.createObjectURL(new Blob([JSON.stringify(sidecarData(), null, 1)], { type: 'application/json' }));
+    const a = document.createElement('a'); a.href = url; a.download = SIDE; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+  };
+  $('bk-up').onclick = () => $('bk-file').click();
+  $('bk-file').onchange = async (e) => {
+    try {
+      const data = JSON.parse(await e.target.files[0].text());
+      const n = mergeAdjustments(data.photos || {});
+      syncSliders(); draw(); refreshStrip(); scheduleSidecar();
+      closeModal(); toast(n ? `Ajustes recuperados en ${n} fotos` : 'Esa copia no coincide con estas fotos');
+    } catch { toast('Ese archivo no es una copia de Revelado DC'); }
+  };
 }
 
 async function loadFromDir(dir) {
@@ -83,20 +149,20 @@ async function loadFromDir(dir) {
   if (!files.length) { toast('En esa carpeta no hay fotos JPG.'); return; }
   state.dir = dir;
   store.set('lastDir', dir);
-  await loadFiles(files);
+  await loadFiles(files, await readSidecar(dir));
 }
 
 async function resumeFolder() {
   const dir = await store.get('lastDir');
   if (!dir) return;
   try {
-    if ((await dir.queryPermission({ mode: 'read' })) !== 'granted'
-      && (await dir.requestPermission({ mode: 'read' })) !== 'granted') return;
+    if ((await dir.queryPermission({ mode: 'readwrite' })) !== 'granted'
+      && (await dir.requestPermission({ mode: 'readwrite' })) !== 'granted') return;
     await loadFromDir(dir);
   } catch { toast('No se pudo abrir la carpeta anterior. Elegila de nuevo.'); }
 }
 
-async function loadFiles(fileList) {
+async function loadFiles(fileList, sidecar = {}) {
   const files = [...fileList].filter((f) => EXTS.test(f.name)).sort((a, b) => naturalSort(a.name, b.name));
   if (!files.length) return;
   for (const p of state.photos) if (p.thumbUrl) URL.revokeObjectURL(p.thumbUrl);
@@ -105,7 +171,7 @@ async function loadFiles(fileList) {
   state.photos = files.map((file, i) => ({ i, file, name: file.name, key: keyOf(file), s: freshSettings(), hist: [], thumbUrl: null, orient: 1 }));
   // Ajustes guardados de otras sesiones
   await Promise.all(state.photos.map(async (p) => {
-    const saved = await store.get('edit:' + p.key);
+    const saved = (await store.get('edit:' + p.key)) || sidecar[portableKey(p)];
     if (saved) p.s = Object.assign(freshSettings(), saved);
   }));
   state.sel = new Set([0]); state.anchor = 0;
@@ -356,7 +422,8 @@ function commit() {
   refreshStrip();
 }
 const saveTimers = new Map();
-function save(p) {
+function save(p, side = true) {
+  if (side) scheduleSidecar();
   clearTimeout(saveTimers.get(p.key));
   saveTimers.set(p.key, setTimeout(() => {
     if (isEdited(p.s)) store.set('edit:' + p.key, p.s); else store.del('edit:' + p.key);
@@ -731,6 +798,7 @@ $('btn-export').addEventListener('click', openExport);
 // ---------------------------------------------------------------- botones y teclado
 for (const id of ['btn-folder', 'btn-folder-2']) $(id).addEventListener('click', openFolder);
 for (const id of ['btn-files', 'btn-files-2']) $(id).addEventListener('click', () => $('file-input').click());
+$('btn-backup').addEventListener('click', openBackup);
 $('file-input').addEventListener('change', (e) => { state.dir = null; loadFiles(e.target.files); e.target.value = ''; });
 $('btn-resume').addEventListener('click', resumeFolder);
 $('btn-prev').addEventListener('click', () => selectPhoto(state.cur - 1));
@@ -773,3 +841,13 @@ loadPresets();
   if (window.showDirectoryPicker && await store.get('lastDir')) $('btn-resume').hidden = false;
 })();
 window.__revelado = { state, engine };
+
+// Instalar como programa (Chrome / Edge: ícono ⊕ en la barra de direcciones)
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+let installEvt = null;
+window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt = e; $('btn-install').hidden = false; });
+$('btn-install').addEventListener('click', async () => {
+  if (!installEvt) return;
+  installEvt.prompt(); await installEvt.userChoice; installEvt = null; $('btn-install').hidden = true;
+});
+window.addEventListener('appinstalled', () => toast('¡Listo! Revelado DC quedó instalado en tu compu'));

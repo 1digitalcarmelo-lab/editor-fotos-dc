@@ -1,0 +1,15 @@
+{
+  "name": "Revelado DC · Editor de fotos",
+  "short_name": "Revelado DC",
+  "description": "Editor de fotos por lote: luces, sombras, color, presets y exportación. Las fotos no se suben a ningún lado.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0e0d1c",
+  "theme_color": "#15142a",
+  "lang": "es",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
