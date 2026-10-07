@@ -68,6 +68,7 @@ function pick(s, keys) { const o = {}; for (const k of keys) o[k] = structuredCl
 // ---------------------------------------------------------------- abrir fotos
 async function openFolder() {
   if (!window.showDirectoryPicker) { $('file-input').click(); return; }
+  toast('Elegí la CARPETA de las fotos y tocá "Seleccionar carpeta". En esa ventana las fotos no se ven: es normal.', 6000);
   try {
     const dir = await window.showDirectoryPicker({ id: 'revelado-fotos', mode: 'read' });
     await loadFromDir(dir);
