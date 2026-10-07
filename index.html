@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Revelado DC · Editor de fotos por lote</title>
 <meta name="description" content="Editá cientos de fotos de un evento en el navegador: luces, sombras, color, presets y exportación por lote. Las fotos no se suben a ningún lado.">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='30' fill='%2314122b'/%3E%3Ccircle cx='32' cy='32' r='16' fill='none' stroke='%23e2b866' stroke-width='5'/%3E%3Ccircle cx='32' cy='32' r='6' fill='%23e2b866'/%3E%3C/svg%3E">
+<link rel="icon" type="image/png" href="icons/logo-mosca.png">
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="theme-color" content="#15142a">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
@@ -13,7 +13,7 @@
 </head>
 <body>
 <header class="top">
-  <div class="brand"><span class="mark" aria-hidden="true"></span><div><b>Revelado DC</b><small>Editor de fotos por lote</small></div></div>
+  <div class="brand"><img class="brand-logo" src="assets-logo-principal.png" alt="Digital Carmelo" width="42" height="42"><div><b>Revelado DC</b><small>Editor de fotos por lote</small></div></div>
   <div class="top-actions">
     <button class="btn ghost" id="btn-install" hidden title="Instalarlo en la compu, con ícono propio">⊕ Instalar</button>
     <button class="btn ghost" id="btn-backup" title="Copia de seguridad de tus ediciones">💾 Copia de ajustes</button>
@@ -56,6 +56,12 @@
       <span class="name" id="photo-name"></span>
       <button class="icon" id="btn-next" title="Siguiente (→)">›</button>
       <span class="sep"></span>
+      <button class="btn small ghost" id="btn-zoom-out" title="Alejar">−</button>
+      <span class="zoom-label" id="zoom-label">100%</span>
+      <button class="btn small ghost" id="btn-zoom-in" title="Acercar">＋</button>
+      <button class="btn small ghost" id="btn-zoom-fit" title="Ajustar a pantalla">Ajustar</button>
+      <button class="btn small ghost" id="btn-duplicate" title="Crear una copia de esta foto en la sesión">Duplicar</button>
+      <button class="btn small ghost" id="btn-guides" title="Mostrar guías de alineación">Guías</button>
       <button class="btn small" id="btn-before" title="Mantené apretado o tocá \ para comparar">Antes / Después</button>
     </div>
   </section>
@@ -67,6 +73,7 @@
         <button class="btn small" id="btn-auto" title="Ajuste automático de luces">✨ Auto</button>
         <button class="btn small ghost" id="btn-reset" title="Volver a la foto original">Restablecer</button>
         <button class="btn small ghost" id="btn-undo" title="Deshacer (Ctrl+Z)">↶</button>
+        <button class="btn small ghost" id="btn-redo" title="Rehacer (Ctrl+Shift+Z)">↷</button>
       </div>
     </div>
 
@@ -91,6 +98,19 @@
     <div class="block">
       <h3>Presencia</h3>
       <div id="sl-pres"></div>
+      <div id="sl-extra"></div>
+    </div>
+
+    <div class="block">
+      <h3>Edición local</h3>
+      <p class="muted">Máscaras no destructivas para iluminar, oscurecer, colorear o suavizar zonas puntuales.</p>
+      <div class="row gap wrap">
+        <button class="btn small" id="btn-mask-radial">＋ Radial</button>
+        <button class="btn small ghost" id="btn-mask-linear">＋ Lineal</button>
+        <button class="btn small ghost" id="btn-mask-delete" disabled>Eliminar</button>
+      </div>
+      <div id="mask-list" class="mask-list"></div>
+      <div id="mask-sliders"></div>
     </div>
 
     <div class="block">
@@ -116,6 +136,16 @@
         </select>
         <button class="btn small ghost" id="btn-aspect-flip" title="Vertical / horizontal">⇄</button>
       </div>
+    </div>
+
+    <div class="block">
+      <h3>Correcciones ópticas</h3>
+      <div id="sl-optics"></div>
+      <div class="row gap wrap">
+        <button class="btn small" id="btn-red-eye">◉ Ojos rojos</button>
+        <button class="btn small ghost" id="btn-red-eye-clear">Limpiar puntos</button>
+      </div>
+      <p class="muted">Activá Ojos rojos y hacé clic sobre cada pupila afectada en la foto.</p>
     </div>
 
     <div class="block sync">

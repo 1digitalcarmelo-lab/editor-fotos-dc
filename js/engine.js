@@ -26,7 +26,9 @@ in vec2 vUv; out vec4 o;
 uniform sampler2D uSrc, uBlur;
 uniform mat3 uM;
 uniform vec2 uTexel;
-uniform float uExp,uCon,uHi,uSh,uWh,uBl,uTemp,uTint,uVib,uSat,uCla,uVig,uSharp,uBW,uAspect;
+uniform float uExp,uCon,uHi,uSh,uWh,uBl,uTemp,uTint,uVib,uSat,uCla,uVig,uSharp,uBW,uAspect,uDehaze,uNoise,uDistortion,uFisheye;
+uniform vec4 uMaskGeom[8], uMaskTone[8], uMaskColor[8], uMaskDetail[8];
+uniform vec4 uRedEye[16];
 float s2l(float c){ return c<=0.04045 ? c/12.92 : pow((c+0.055)/1.055, 2.4); }
 vec3 s2l(vec3 c){ return vec3(s2l(c.r), s2l(c.g), s2l(c.b)); }
 float l2s(float c){ c=max(c,0.); return c<=0.0031308 ? c*12.92 : 1.055*pow(c,1./2.4)-0.055; }
@@ -41,6 +43,12 @@ vec3 base(vec3 srgb){
 float levels(float L){ float b0 = -uBl*0.10; float w0 = 1. - uWh*0.15; return (L-b0)/(w0-b0); }
 void main(){
   vec2 uv = (uM * vec3(vUv,1.)).xy;
+  vec2 dc = uv * 2. - 1.;
+  float rr = dot(dc, dc);
+  dc *= 1. + uDistortion * rr;
+  float fr = length(dc);
+  dc *= 1. + uFisheye * fr * fr * .35;
+  uv = dc * .5 + .5;
   if (uv.x<0. || uv.y<0. || uv.x>1. || uv.y>1.) { o = vec4(0.,0.,0.,1.); return; }
   vec3 c = texture(uSrc, uv).rgb;
   if (uSharp > 0.) {
@@ -67,6 +75,16 @@ void main(){
   // Cambia la luz sin disparar el color: el croma escala con la raíz del cambio de luz (evita rojos al levantar sombras)
   float ratio = t / max(L, 1e-4);
   vec3 q = vec3(t) + (p - vec3(L)) * clamp(pow(ratio, 0.8), 0., 1.35);
+  for (int i = 0; i < 16; i++) {
+    vec4 eye = uRedEye[i];
+    if (eye.z <= 0.) continue;
+    float em = 1. - smoothstep(eye.z * .55, eye.z, distance(vUv, eye.xy));
+    float red = max(q.r - max(q.g, q.b) * 1.18, 0.);
+    q.r -= red * em * eye.w;
+    q = mix(q, vec3(luma(q)), em * eye.w * .15);
+  }
+  q = mix(q, q + (q - vec3(.5)) * uDehaze * .9, clamp(abs(uDehaze), 0., 1.));
+  q = mix(q, pb, clamp(uNoise * .45, 0., .45));
   float mx = max(q.r, max(q.g, q.b));
   if (mx > 1.) q = vec3(t) + (q-vec3(t)) * (1.-t)/max(mx-t, 1e-4);
   float g = luma(q);
@@ -76,6 +94,28 @@ void main(){
   float vf = 1. + uVib*(1.-sat)*(1.-skin);
   q = vec3(g) + (q-vec3(g)) * max(vf*(1.+uSat), 0.);
   if (uBW > 0.5) { float bw = dot(q, vec3(0.30,0.59,0.11)); q = vec3(bw); }
+  for (int i = 0; i < 8; i++) {
+    vec4 g = uMaskGeom[i];
+    if (g.z <= 0.0) continue;
+    vec2 md = vUv - g.xy;
+    float cs = cos(g.w), sn = sin(g.w);
+    md = mat2(cs, -sn, sn, cs) * md;
+    float linear = uMaskDetail[i].w;
+    float feather = max(.01, uMaskDetail[i].z);
+    float m = linear > .5 ? smoothstep(.5 + feather, .5 - feather, abs(md.x / max(g.z, .001)))
+      : 1. - smoothstep(.42, .5, length(md / max(g.zw, vec2(.001))));
+    if (uMaskColor[i].w > .5) m = 1. - m;
+    vec4 t = uMaskTone[i], c = uMaskColor[i], d = uMaskDetail[i];
+    vec3 lm = q * exp2(vec3(t.x * m));
+    float ll = luma(lm);
+    ll = clamp(ll + t.y*m*(ll-.5) + t.z*m*(1.-ll) + t.w*m*ll, 0., 1.);
+    lm = vec3(ll) + (lm - vec3(luma(lm))) * (1. + c.y*m);
+    lm.r *= 1. + c.z*m; lm.b *= 1. - c.z*m; lm.g *= 1. + c.w*m;
+    lm = vec3(luma(lm)) + (lm - vec3(luma(lm))) * (1. + c.x*m);
+    lm += (lm - vec3(.5)) * d.x*m;
+    lm = mix(lm, texture(uBlur, uv).rgb, clamp(d.y*m, 0., 1.));
+    q = mix(q, lm, clamp(m, 0., 1.));
+  }
   vec2 d = (vUv-0.5) * vec2(uAspect, 1.) / (0.5*sqrt(uAspect*uAspect+1.));
   q *= 1. + uVig*0.75*smoothstep(0.30, 1.0, length(d));
   o = vec4(clamp(q, 0., 1.), 1.);
@@ -85,7 +125,8 @@ export const DEFAULTS = Object.freeze({
   exp: 0, con: 0, hi: 0, sh: 0, wh: 0, bl: 0,
   temp: 0, tint: 0, vib: 0, sat: 0,
   cla: 0, sharp: 0, vig: 0, bw: false,
-  rot: 0, ang: 0, crop: { x: 0, y: 0, w: 1, h: 1 }, aspect: 'libre',
+  dehaze: 0, noise: 0, distortion: 0, fisheye: 0, redEyes: [],
+  rot: 0, ang: 0, crop: { x: 0, y: 0, w: 1, h: 1 }, aspect: 'libre', masks: [],
 });
 
 export function freshSettings() { return structuredClone(DEFAULTS); }
@@ -153,7 +194,14 @@ export class Engine {
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
     p.u = {};
     const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
-    for (let i = 0; i < n; i++) { const info = gl.getActiveUniform(p, i); p.u[info.name] = gl.getUniformLocation(p, info.name); }
+    for (let i = 0; i < n; i++) {
+      const info = gl.getActiveUniform(p, i), name = info.name;
+      const base = name.replace(/\[0\]$/, '');
+      if (base !== name) {
+        p.u[base] ||= [];
+        for (let j = 0; j < info.size; j++) p.u[base][j] = gl.getUniformLocation(p, `${base}[${j}]`);
+      } else p.u[name] = gl.getUniformLocation(p, name);
+    }
     return p;
   }
 
@@ -247,6 +295,24 @@ export class Engine {
     gl.uniform1f(u.uCla, f('cla')); gl.uniform1f(u.uSharp, f('sharp')); gl.uniform1f(u.uVig, f('vig'));
     gl.uniform1f(u.uBW, z.bw ? 1 : 0);
     gl.uniform1f(u.uAspect, outW / outH);
+    gl.uniform1f(u.uDehaze, (z.dehaze || 0) / 100);
+    gl.uniform1f(u.uNoise, (z.noise || 0) / 100);
+    gl.uniform1f(u.uDistortion, (z.distortion || 0) / 100);
+    gl.uniform1f(u.uFisheye, (z.fisheye || 0) / 100);
+    const eyes = Array.isArray(z.redEyes) ? z.redEyes.slice(0, 16) : [];
+    for (let i = 0; i < 16; i++) {
+      const eye = eyes[i] || {};
+      gl.uniform4f(u.uRedEye[i], eye.x || 0, eye.y || 0, eye.radius || 0, eye.strength ?? 1);
+    }
+    const masks = Array.isArray(z.masks) ? z.masks.slice(0, 8) : [];
+    for (let i = 0; i < 8; i++) {
+      const m = masks[i] || {}, t = m.tone || {};
+      const g = m.kind === 'linear' ? [m.x ?? .5, m.y ?? .5, m.w ?? .75, m.rotation ?? 0] : [m.x ?? .5, m.y ?? .5, m.w ?? .25, m.h ?? .25];
+      gl.uniform4f(u.uMaskGeom[i], ...g);
+      gl.uniform4f(u.uMaskTone[i], t.exp || 0, (t.con || 0)/100, (t.hi || 0)/100, (t.sh || 0)/100);
+      gl.uniform4f(u.uMaskColor[i], (t.sat || 0)/100, (t.vib || 0)/100, (t.temp || 0)/100, (t.tint || 0)/100);
+      gl.uniform4f(u.uMaskDetail[i], (t.cla || 0)/100, (t.blur || 0)/100, m.feather ?? .12, m.kind === 'linear' ? 1 : (m.invert ? 1 : 0));
+    }
     this.#quad(p, fbo ? 1 : -1);
   }
 

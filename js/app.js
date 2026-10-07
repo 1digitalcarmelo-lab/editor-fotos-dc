@@ -6,7 +6,7 @@ import * as store from './store.js';
 const $ = (id) => document.getElementById(id);
 const PREVIEW_MAX = 2560;
 const EXTS = /\.(jpe?g|png|webp)$/i;
-const TONE_KEYS = ['exp', 'con', 'hi', 'sh', 'wh', 'bl', 'temp', 'tint', 'vib', 'sat', 'cla', 'sharp', 'vig', 'bw'];
+const TONE_KEYS = ['exp', 'con', 'hi', 'sh', 'wh', 'bl', 'temp', 'tint', 'vib', 'sat', 'cla', 'sharp', 'vig', 'dehaze', 'noise', 'distortion', 'fisheye', 'bw'];
 const GEO_KEYS = ['rot', 'ang', 'crop', 'aspect'];
 
 const SLIDERS = {
@@ -29,6 +29,14 @@ const SLIDERS = {
     { k: 'sharp', label: 'Nitidez', min: 0, max: 100 },
     { k: 'vig', label: 'Viñeta' },
   ],
+  'sl-extra': [
+    { k: 'dehaze', label: 'Dehaze / niebla' },
+    { k: 'noise', label: 'Reducción de ruido', min: 0, max: 100 },
+  ],
+  'sl-optics': [
+    { k: 'distortion', label: 'Barril / cojín', min: -100, max: 100 },
+    { k: 'fisheye', label: 'Fisheye', min: -100, max: 100 },
+  ],
   'sl-crop': [
     { k: 'ang', label: 'Enderezar', min: -20, max: 20, step: 0.1, fmt: (v) => v.toFixed(1) + '°' },
   ],
@@ -46,6 +54,7 @@ const state = {
   photos: [], cur: -1, sel: new Set(), anchor: -1,
   clip: null, cropMode: false, before: false,
   dir: null, presets: [], previews: new Map(), loadToken: 0,
+  zoom: 1, panX: 0, panY: 0, redo: [], maskMode: false, selectedMask: -1, redEyeMode: false,
 };
 
 const engine = new Engine($('view'));
@@ -61,7 +70,7 @@ const keyOf = (f) => `${f.name}|${f.size}|${f.lastModified}`;
 const naturalSort = (a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
 function isEdited(s) {
   return TONE_KEYS.some((k) => (s[k] || 0) !== (DEFAULTS[k] || 0)) || s.rot || s.ang
-    || s.crop.x || s.crop.y || s.crop.w !== 1 || s.crop.h !== 1;
+    || s.crop.x || s.crop.y || s.crop.w !== 1 || s.crop.h !== 1 || (s.masks?.length > 0) || (s.redEyes?.length > 0);
 }
 function pick(s, keys) { const o = {}; for (const k of keys) o[k] = structuredClone(s[k]); return o; }
 
@@ -333,11 +342,14 @@ function drawNow() {
   const vp = $('viewport');
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   const [ow, oh] = outSize(p.s, engine.w, engine.h, state.cropMode);
-  const k = Math.min((vp.clientWidth - 24) * dpr / ow, (vp.clientHeight - 24) * dpr / oh, 1);
+  const fit = Math.min((vp.clientWidth - 24) * dpr / ow, (vp.clientHeight - 24) * dpr / oh, 1);
+  const k = fit * state.zoom;
   const w = Math.max(1, Math.round(ow*k)), h = Math.max(1, Math.round(oh*k));
   engine.render(p.s, w, h, { before: state.before, ignoreCrop: state.cropMode });
   const cv = $('view');
   cv.style.width = (w / dpr) + 'px'; cv.style.height = (h / dpr) + 'px';
+  cv.style.transform = `translate(${state.panX}px, ${state.panY}px)`;
+  $('zoom-label').textContent = `${Math.round(state.zoom * 100)}%`;
   $('badge-before').hidden = !state.before;
   if (state.cropMode) placeCrop();
   scheduleHisto();
@@ -366,6 +378,19 @@ function drawHisto() {
   ctx.fillStyle = clipLo > 0.01 ? '#6b9bff' : 'rgba(255,255,255,.15)'; ctx.fillRect(2, 2, 6, 6);
 }
 window.addEventListener('resize', draw);
+let panDrag = null;
+$('viewport').addEventListener('wheel', (e) => {
+  if (state.cropMode) return; e.preventDefault();
+  state.zoom = Math.max(.25, Math.min(4, +(state.zoom * (e.deltaY < 0 ? 1.1 : .9)).toFixed(2))); draw();
+}, { passive: false });
+$('viewport').addEventListener('pointerdown', (e) => {
+  if (state.cropMode || state.zoom <= 1) return;
+  panDrag = { x: e.clientX, y: e.clientY, px: state.panX, py: state.panY }; e.currentTarget.setPointerCapture(e.pointerId);
+});
+$('viewport').addEventListener('pointermove', (e) => {
+  if (!panDrag) return; state.panX = panDrag.px + e.clientX - panDrag.x; state.panY = panDrag.py + e.clientY - panDrag.y; draw();
+});
+$('viewport').addEventListener('pointerup', () => { panDrag = null; });
 
 // ---------------------------------------------------------------- deslizadores
 const sliderEls = {};
@@ -409,7 +434,48 @@ function syncSliders() {
   }
   $('chk-bw').checked = !!p.s.bw;
   $('aspect-select').value = p.s.aspect || 'libre';
+  renderMasks();
 }
+
+const MASK_KEYS = [
+  ['exp', 'Exposición', -3, 3, .05], ['con', 'Contraste', -100, 100, 1], ['hi', 'Altas luces', -100, 100, 1],
+  ['sh', 'Sombras', -100, 100, 1], ['wh', 'Blancos', -100, 100, 1], ['bl', 'Negros', -100, 100, 1],
+  ['temp', 'Temperatura', -100, 100, 1], ['tint', 'Matiz', -100, 100, 1], ['vib', 'Intensidad', -100, 100, 1],
+  ['sat', 'Saturación', -100, 100, 1], ['cla', 'Claridad', -100, 100, 1], ['sharp', 'Nitidez', 0, 100, 1],
+  ['noise', 'Reducción de ruido', 0, 100, 1], ['dehaze', 'Dehaze', -100, 100, 1], ['blur', 'Blur', 0, 100, 1],
+];
+function renderMasks() {
+  const p = cur(), list = $('mask-list'), host = $('mask-sliders'); if (!list || !host) return;
+  const masks = p?.s.masks || []; list.innerHTML = '';
+  masks.forEach((m, i) => {
+    const b = document.createElement('button'); b.className = `mask-chip ${i === state.selectedMask ? 'on' : ''}`;
+    b.textContent = `${m.kind === 'linear' ? '▰' : '◉'} ${i + 1}`; b.title = 'Seleccionar máscara';
+    b.onclick = () => { state.selectedMask = i; renderMasks(); }; list.appendChild(b);
+  });
+  $('btn-mask-delete').disabled = state.selectedMask < 0 || state.selectedMask >= masks.length;
+  host.innerHTML = '';
+  const m = masks[state.selectedMask]; if (!m) return;
+  const add = (key, label, min, max, step) => {
+    const wrap = document.createElement('div'); wrap.className = 'sl'; const v = m.tone[key] || 0;
+    wrap.innerHTML = `<div class="sl-head"><label>${label}</label><output>${v > 0 ? '+' : ''}${v}</output></div><input type="range" min="${min}" max="${max}" step="${step}" value="${v}">`;
+    const input = wrap.querySelector('input'), out = wrap.querySelector('output'); input.oninput = () => { m.tone[key] = +input.value; out.textContent = (+input.value > 0 ? '+' : '') + input.value; draw(); save(cur()); };
+    host.appendChild(wrap);
+  };
+  MASK_KEYS.forEach((x) => add(...x));
+  const opts = document.createElement('label'); opts.className = 'check'; opts.innerHTML = `<input type="checkbox" ${m.invert ? 'checked' : ''}> Invertir máscara · Feather ${Math.round((m.feather ?? .12) * 100)}%`;
+  opts.querySelector('input').onchange = (e) => { m.invert = e.target.checked; draw(); save(cur()); }; host.appendChild(opts);
+}
+function addMask(kind) {
+  const p = cur(); if (!p) return;
+  if (!Array.isArray(p.s.masks)) p.s.masks = [];
+  if (p.s.masks.length >= 8) return toast('Podés usar hasta 8 máscaras por foto');
+  p.hist.push(structuredClone(p.s));
+  p.s.masks.push({ kind, x: .5, y: .5, w: kind === 'linear' ? .75 : .25, h: kind === 'linear' ? .75 : .25, rotation: 0, feather: .12, tone: {} });
+  state.selectedMask = p.s.masks.length - 1; renderMasks(); draw(); save(p); refreshStrip();
+}
+$('btn-mask-radial').addEventListener('click', () => addMask('radial'));
+$('btn-mask-linear').addEventListener('click', () => addMask('linear'));
+$('btn-mask-delete').addEventListener('click', () => { const p = cur(); if (!p || state.selectedMask < 0) return; p.hist.push(structuredClone(p.s)); p.s.masks.splice(state.selectedMask, 1); state.selectedMask = Math.min(state.selectedMask, p.s.masks.length - 1); renderMasks(); draw(); save(p); refreshStrip(); });
 
 // Historial (deshacer) y guardado
 let pending = null;
@@ -433,7 +499,13 @@ function change(fn) { const p = cur(); if (!p) return; beginChange(); fn(p.s, p)
 
 function undo() {
   const p = cur(); if (!p || !p.hist.length) return toast('No hay nada para deshacer');
+  state.redo.push(structuredClone(p.s));
   p.s = p.hist.pop(); syncSliders(); draw(); save(p); refreshStrip();
+}
+
+function redo() {
+  const p = cur(); if (!p || !state.redo.length) return toast('No hay nada para rehacer');
+  p.hist.push(structuredClone(p.s)); p.s = state.redo.pop(); syncSliders(); draw(); save(p); refreshStrip();
 }
 
 // ---------------------------------------------------------------- auto
@@ -504,6 +576,7 @@ async function autoBatch() {
   const warm = base.s.temp - (base.auto?.temp ?? 0), green = base.s.tint - (base.auto?.tint ?? 0);
   const btn = $('btn-auto-batch'); btn.disabled = true;
   let n = 0;
+  const usedNames = new Set();
   for (const p of list) {
     try {
       let img = null;
@@ -772,7 +845,13 @@ async function runExport() {
       let blob = await new Promise((res) => canvas.toBlob(res, 'image/jpeg', quality));
       if (!blob) throw new Error('sin imagen');
       blob = await withExif(p.file, blob);
-      const name = p.name.replace(/\.(png|webp|jpe?g)$/i, '') + suffix + '.jpg';
+       const base = p.name.replace(/\.(png|webp|jpe?g)$/i, '') + suffix;
+       let name = `${base}.jpg`, n = 2;
+       while (usedNames.has(name)) name = `${base}-${n++}.jpg`;
+       if (outDir) {
+         while (await outDir.getFileHandle(name).then(() => true).catch(() => false)) name = `${base}-${n++}.jpg`;
+       }
+       usedNames.add(name);
       if (outDir) {
         const fh = await outDir.getFileHandle(name, { create: true });
         const w = await fh.createWritable(); await w.write(blob); await w.close();
@@ -807,6 +886,33 @@ $('btn-auto').addEventListener('click', autoTone);
 $('btn-auto-batch').addEventListener('click', autoBatch);
 $('btn-reset').addEventListener('click', () => change((s) => { Object.assign(s, freshSettings()); }));
 $('btn-undo').addEventListener('click', undo);
+$('btn-redo').addEventListener('click', redo);
+$('btn-zoom-in').addEventListener('click', () => { state.zoom = Math.min(4, +(state.zoom * 1.25).toFixed(2)); draw(); });
+$('btn-zoom-out').addEventListener('click', () => { state.zoom = Math.max(.25, +(state.zoom / 1.25).toFixed(2)); draw(); });
+$('btn-zoom-fit').addEventListener('click', () => { state.zoom = 1; state.panX = 0; state.panY = 0; draw(); });
+$('btn-duplicate').addEventListener('click', () => {
+  const p = cur(); if (!p) return;
+  const copy = { ...p, i: state.photos.length, name: p.name.replace(/(\.[^.]+)$/, '-copia$1'), key: `${p.key}|copy|${Date.now()}`, s: structuredClone(p.s), hist: [], thumbUrl: null };
+  state.photos.push(copy); state.sel = new Set([copy.i]); state.anchor = copy.i; buildStrip(); selectPhoto(copy.i); toast('Foto duplicada en la sesión');
+});
+$('btn-guides').addEventListener('click', () => { $('viewport').classList.toggle('guides'); $('btn-guides').classList.toggle('on'); });
+$('btn-red-eye').addEventListener('click', () => {
+  state.redEyeMode = !state.redEyeMode;
+  $('btn-red-eye').classList.toggle('on', state.redEyeMode);
+  toast(state.redEyeMode ? 'Ojos rojos: hacé clic sobre cada pupila' : 'Corrección de ojos rojos desactivada');
+});
+$('btn-red-eye-clear').addEventListener('click', () => {
+  const p = cur(); if (!p) return;
+  change((s) => { s.redEyes = []; });
+});
+$('view').addEventListener('click', (e) => {
+  if (!state.redEyeMode || state.cropMode) return;
+  const p = cur(), r = e.currentTarget.getBoundingClientRect();
+  if (!p || !r.width || !r.height) return;
+  const eye = { x: (e.clientX - r.left) / r.width, y: 1 - (e.clientY - r.top) / r.height, radius: .045 / state.zoom, strength: 1 };
+  change((s) => { if (!Array.isArray(s.redEyes)) s.redEyes = []; if (s.redEyes.length < 16) s.redEyes.push(eye); });
+  toast('Punto de ojo rojo agregado');
+});
 $('chk-bw').addEventListener('change', (e) => change((s) => { s.bw = e.target.checked; }));
 
 const stage = $('stage');
@@ -824,7 +930,7 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'ArrowRight') { e.preventDefault(); selectPhoto(state.cur + 1); }
   else if (e.key === 'ArrowLeft') { e.preventDefault(); selectPhoto(state.cur - 1); }
   else if (e.key === '\\') setBefore(!state.before);
-  else if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); }
+  else if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); }
   else if (mod && e.key.toLowerCase() === 'c') { e.preventDefault(); copySettings(); }
   else if (mod && e.key.toLowerCase() === 'v') { e.preventDefault(); if (state.clip) applyToSelection(state.clip); }
   else if (mod && e.key.toLowerCase() === 'a') { e.preventDefault(); $('btn-sel-all').click(); }
@@ -838,12 +944,25 @@ function escapeHtml(s) { return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&a
 buildSliders();
 loadPresets();
 (async () => {
-  if (window.showDirectoryPicker && await store.get('lastDir')) $('btn-resume').hidden = false;
+  if (window.showDirectoryPicker && await store.get('lastDir')) {
+    $('btn-resume').hidden = false;
+    try { await resumeFolder(); } catch { /* queda disponible el botón de reconexión */ }
+  }
 })();
 window.__revelado = { state, engine };
 
 // Instalar como programa (Chrome / Edge: ícono ⊕ en la barra de direcciones)
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').then((reg) => {
+  reg.update();
+  reg.addEventListener('updatefound', () => {
+    const worker = reg.installing; if (!worker) return;
+    worker.addEventListener('statechange', () => {
+      if (worker.state === 'installed' && navigator.serviceWorker.controller) {
+        toast('Hay una actualización de Revelado DC. Recargá para usarla.', 7000);
+      }
+    });
+  });
+}).catch(() => {});
 let installEvt = null;
 window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt = e; $('btn-install').hidden = false; });
 $('btn-install').addEventListener('click', async () => {

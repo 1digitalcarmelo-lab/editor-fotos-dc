@@ -4,8 +4,10 @@
 let dbp = null;
 function db() {
   if (!dbp) dbp = new Promise((res, rej) => {
-    const r = indexedDB.open('revelado-dc', 1);
-    r.onupgradeneeded = () => { r.result.createObjectStore('kv'); };
+    const r = indexedDB.open('revelado-dc', 2);
+    r.onupgradeneeded = () => {
+      if (!r.result.objectStoreNames.contains('kv')) r.result.createObjectStore('kv');
+    };
     r.onsuccess = () => res(r.result);
     r.onerror = () => rej(r.error);
   });
