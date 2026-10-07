@@ -2,8 +2,11 @@
 import { Engine, DEFAULTS, freshSettings, frameSize, outSize } from './engine.js';
 import { readExif, withExif, orientationCss } from './exif.js';
 import * as store from './store.js';
+import { PRINCIPAL_LOGO, MOSCA_LOGO } from './branding.js';
 
 const $ = (id) => document.getElementById(id);
+document.querySelectorAll('.brand-logo, .hero-logo').forEach((img) => { img.src = PRINCIPAL_LOGO; });
+document.querySelectorAll('link[rel="icon"], link[rel="apple-touch-icon"]').forEach((link) => { link.href = MOSCA_LOGO; });
 const PREVIEW_MAX = 2560;
 const EXTS = /\.(jpe?g|png|webp)$/i;
 const TONE_KEYS = ['exp', 'con', 'hi', 'sh', 'wh', 'bl', 'temp', 'tint', 'vib', 'sat', 'cla', 'sharp', 'vig', 'dehaze', 'noise', 'distortion', 'fisheye', 'bw'];
@@ -305,6 +308,7 @@ async function selectPhoto(i, resetSel = true) {
   if (i < 0 || i >= state.photos.length) return;
   if (state.cropMode) exitCrop();
   state.cur = i;
+  state.selectedMask = -1;
   if (resetSel && !state.sel.has(i)) { state.sel = new Set([i]); state.anchor = i; }
   const p = cur();
   $('photo-name').textContent = `${i + 1} / ${state.photos.length} · ${p.name}`;
@@ -349,6 +353,7 @@ function drawNow() {
   const cv = $('view');
   cv.style.width = (w / dpr) + 'px'; cv.style.height = (h / dpr) + 'px';
   cv.style.transform = `translate(${state.panX}px, ${state.panY}px)`;
+  renderMaskOverlay();
   $('zoom-label').textContent = `${Math.round(state.zoom * 100)}%`;
   $('badge-before').hidden = !state.before;
   if (state.cropMode) placeCrop();
@@ -447,6 +452,7 @@ const MASK_KEYS = [
 function renderMasks() {
   const p = cur(), list = $('mask-list'), host = $('mask-sliders'); if (!list || !host) return;
   const masks = p?.s.masks || []; list.innerHTML = '';
+  state.selectedMask = Math.min(state.selectedMask, masks.length - 1);
   masks.forEach((m, i) => {
     const b = document.createElement('button'); b.className = `mask-chip ${i === state.selectedMask ? 'on' : ''}`;
     b.textContent = `${m.kind === 'linear' ? '▰' : '◉'} ${i + 1}`; b.title = 'Seleccionar máscara';
@@ -462,15 +468,54 @@ function renderMasks() {
     host.appendChild(wrap);
   };
   MASK_KEYS.forEach((x) => add(...x));
-  const opts = document.createElement('label'); opts.className = 'check'; opts.innerHTML = `<input type="checkbox" ${m.invert ? 'checked' : ''}> Invertir máscara · Feather ${Math.round((m.feather ?? .12) * 100)}%`;
-  opts.querySelector('input').onchange = (e) => { m.invert = e.target.checked; draw(); save(cur()); }; host.appendChild(opts);
+  const opts = document.createElement('label'); opts.className = 'check'; opts.innerHTML = `<input type="checkbox" ${m.invert ? 'checked' : ''}> Invertir máscara`;
+  opts.querySelector('input').onchange = (e) => { m.invert = e.target.checked; draw(); save(cur()); renderMaskOverlay(); }; host.appendChild(opts);
+  const feather = document.createElement('div'); feather.className = 'sl'; feather.innerHTML = `<div class="sl-head"><label>Suavidad / feather</label><output>${Math.round((m.feather ?? .12) * 100)}%</output></div><input type="range" min="0" max="100" value="${Math.round((m.feather ?? .12) * 100)}">`;
+  feather.querySelector('input').oninput = (e) => { m.feather = +e.target.value / 100; feather.querySelector('output').textContent = `${e.target.value}%`; renderMaskOverlay(); draw(); save(cur()); };
+  host.appendChild(feather);
+  renderMaskOverlay();
 }
+
+let maskDrag = null;
+function renderMaskOverlay() {
+  const host = $('mask-overlay'), p = cur(), cv = $('view'), vp = $('viewport');
+  if (!host || !p || !cv || maskDrag) return;
+  host.innerHTML = '';
+  const cr = cv.getBoundingClientRect(), vr = vp.getBoundingClientRect();
+  const masks = p.s.masks || [];
+  masks.forEach((m, i) => {
+    const shape = document.createElement('div'); shape.className = `mask-shape ${m.kind === 'linear' ? 'linear' : ''} ${i === state.selectedMask ? 'selected' : ''}`;
+    const mw = Math.max(28, (m.w || .25) * 2 * cr.width), mh = Math.max(28, (m.h || .25) * 2 * cr.height);
+    shape.style.left = `${cr.left - vr.left + (m.x - (m.w || .25)) * cr.width}px`;
+    shape.style.top = `${cr.top - vr.top + (1 - m.y - (m.h || .25)) * cr.height}px`;
+    shape.style.width = `${mw}px`; shape.style.height = `${mh}px`; shape.style.transform = `rotate(${(m.rotation || 0) * 180 / Math.PI}deg)`;
+    shape.dataset.i = i;
+    shape.innerHTML = '<span class="mask-handle se"></span><span class="mask-handle rotate"></span>';
+    shape.addEventListener('pointerdown', (e) => {
+      e.stopPropagation(); state.selectedMask = i;
+      document.querySelectorAll('.mask-shape').forEach((el) => el.classList.toggle('selected', el === shape));
+      const type = e.target.closest('.mask-handle')?.classList.contains('se') ? 'resize' : e.target.closest('.mask-handle')?.classList.contains('rotate') ? 'rotate' : 'move';
+      maskDrag = { type, i, x: e.clientX, y: e.clientY, original: structuredClone(m), rect: cr };
+    });
+    host.appendChild(shape);
+  });
+}
+document.addEventListener('pointermove', (e) => {
+  if (!maskDrag) return;
+  const p = cur(), m = p?.s.masks?.[maskDrag.i]; if (!m) return;
+  const dx = e.clientX - maskDrag.x, dy = e.clientY - maskDrag.y, r = maskDrag.rect;
+  if (maskDrag.type === 'move') { m.x = Math.max(0, Math.min(1, maskDrag.original.x + dx / r.width)); m.y = Math.max(0, Math.min(1, maskDrag.original.y - dy / r.height)); }
+  else if (maskDrag.type === 'resize') { m.w = Math.max(.04, Math.min(.8, maskDrag.original.w + dx / (2*r.width))); m.h = Math.max(.04, Math.min(.8, maskDrag.original.h + dy / (2*r.height))); }
+  else { m.rotation = Math.atan2(e.clientY - r.top - r.height/2, e.clientX - r.left - r.width/2) + Math.PI/2; }
+  renderMaskOverlay(); draw();
+});
+document.addEventListener('pointerup', () => { if (maskDrag) { const p = cur(); maskDrag = null; if (p) { p.hist.push(structuredClone(p.s)); save(p); renderMaskOverlay(); } } });
 function addMask(kind) {
   const p = cur(); if (!p) return;
   if (!Array.isArray(p.s.masks)) p.s.masks = [];
   if (p.s.masks.length >= 8) return toast('Podés usar hasta 8 máscaras por foto');
   p.hist.push(structuredClone(p.s));
-  p.s.masks.push({ kind, x: .5, y: .5, w: kind === 'linear' ? .75 : .25, h: kind === 'linear' ? .75 : .25, rotation: 0, feather: .12, tone: {} });
+  p.s.masks.push({ kind, x: .5, y: .5, w: kind === 'linear' ? .75 : .25, h: kind === 'linear' ? .10 : .25, rotation: 0, feather: .28, tone: {} });
   state.selectedMask = p.s.masks.length - 1; renderMasks(); draw(); save(p); refreshStrip();
 }
 $('btn-mask-radial').addEventListener('click', () => addMask('radial'));

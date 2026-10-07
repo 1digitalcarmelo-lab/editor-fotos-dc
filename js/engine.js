@@ -100,11 +100,12 @@ void main(){
     vec2 md = vUv - g.xy;
     float cs = cos(g.w), sn = sin(g.w);
     md = mat2(cs, -sn, sn, cs) * md;
-    float linear = uMaskDetail[i].w;
+    float mode = uMaskDetail[i].w;
+    float linear = mod(mode, 2.0);
     float feather = max(.01, uMaskDetail[i].z);
     float m = linear > .5 ? smoothstep(.5 + feather, .5 - feather, abs(md.x / max(g.z, .001)))
       : 1. - smoothstep(.42, .5, length(md / max(g.zw, vec2(.001))));
-    if (uMaskColor[i].w > .5) m = 1. - m;
+    if (mode > 1.5) m = 1. - m;
     vec4 t = uMaskTone[i], c = uMaskColor[i], d = uMaskDetail[i];
     vec3 lm = q * exp2(vec3(t.x * m));
     float ll = luma(lm);
@@ -311,7 +312,7 @@ export class Engine {
       gl.uniform4f(u.uMaskGeom[i], ...g);
       gl.uniform4f(u.uMaskTone[i], t.exp || 0, (t.con || 0)/100, (t.hi || 0)/100, (t.sh || 0)/100);
       gl.uniform4f(u.uMaskColor[i], (t.sat || 0)/100, (t.vib || 0)/100, (t.temp || 0)/100, (t.tint || 0)/100);
-      gl.uniform4f(u.uMaskDetail[i], (t.cla || 0)/100, (t.blur || 0)/100, m.feather ?? .12, m.kind === 'linear' ? 1 : (m.invert ? 1 : 0));
+      gl.uniform4f(u.uMaskDetail[i], (t.cla || 0)/100, (t.blur || 0)/100, m.feather ?? .12, (m.kind === 'linear' ? 1 : 0) + (m.invert ? 2 : 0));
     }
     this.#quad(p, fbo ? 1 : -1);
   }
