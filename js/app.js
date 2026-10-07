@@ -369,37 +369,91 @@ function undo() {
 }
 
 // ---------------------------------------------------------------- auto
-function autoTone() {
-  const p = cur(); if (!p || !previewBitmap) return;
-  const k = Math.min(1, 256 / Math.max(previewBitmap.width, previewBitmap.height));
-  const w = Math.round(previewBitmap.width*k), h = Math.round(previewBitmap.height*k);
+// Analiza una foto (en chiquito) y propone luz y balance de blancos.
+function analyze(img) {
+  const k = Math.min(1, 256 / Math.max(img.width, img.height));
+  const w = Math.max(1, Math.round(img.width*k)), h = Math.max(1, Math.round(img.height*k));
   const c = new OffscreenCanvas(w, h), ctx = c.getContext('2d', { willReadFrequently: true });
-  ctx.drawImage(previewBitmap, 0, 0, w, h);
+  ctx.drawImage(img, 0, 0, w, h);
   const px = ctx.getImageData(0, 0, w, h).data;
-  const L = new Float32Array(w*h);
-  for (let i = 0, j = 0; i < px.length; i += 4, j++) L[j] = (0.2126*px[i] + 0.7152*px[i+1] + 0.0722*px[i+2]) / 255;
-  L.sort();
-  const q = (f) => L[Math.min(L.length - 1, Math.floor(f*L.length))];
   const lin = (v) => v <= 0.04045 ? v/12.92 : Math.pow((v + 0.055)/1.055, 2.4);
   const srgb = (v) => v <= 0.0031308 ? v*12.92 : 1.055*Math.pow(v, 1/2.4) - 0.055;
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-  const med = q(0.5);
-  const ev = clamp(Math.log2(lin(0.46) / Math.max(lin(med), 1e-4)) * 0.85, -1.5, 1.5);
+  const L = new Float32Array(w*h);
+  let sr = 0, sg = 0, sb = 0, nn = 0;
+  for (let i = 0, j = 0; i < px.length; i += 4, j++) {
+    const r = px[i]/255, g = px[i+1]/255, b = px[i+2]/255;
+    const l = 0.2126*r + 0.7152*g + 0.0722*b;
+    L[j] = l;
+    const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+    // Zonas casi neutras (paredes, ropa clara, manteles): sirven para medir el tinte de la luz
+    if (l > 0.15 && l < 0.88 && (mx - mn) / mx < 0.35) { sr += lin(r); sg += lin(g); sb += lin(b); nn++; }
+  }
+  L.sort();
+  const q = (f) => L[Math.min(L.length - 1, Math.floor(f*L.length))];
+  // Fotos claras (bodas de día, fondos blancos) se oscurecen poco: solo se corrige la mitad
+  let ev = Math.log2(lin(0.46) / Math.max(lin(q(0.5)), 1e-4)) * 0.85;
+  ev = ev < 0 ? Math.max(ev * 0.5, -0.7) : Math.min(ev, 1.5);
   const after = (v) => Math.min(1.2, srgb(lin(v) * Math.pow(2, ev)));
   const p99 = after(q(0.995)), p1 = after(q(0.005)), p25 = after(q(0.25));
   const w0 = clamp(p99 / 0.97, 0.85, 1.12);
-  const wh = clamp((1 - w0) / 0.15 * 100 * 0.7, -30, 40);
   const b0 = (p1 - 0.02*w0) / 0.98;
-  const bl = clamp(-b0 / 0.10 * 100 * 0.6, -25, 20);
   let bright = 0; for (let i = Math.floor(L.length*0.9); i < L.length; i++) if (after(L[i]) > 0.92) bright++;
-  change((s) => {
-    Object.assign(s, {
-      exp: Math.round(ev*20)/20, wh: Math.round(wh), bl: Math.round(bl),
-      hi: bright / L.length > 0.02 ? -40 : -20, sh: p25 < 0.22 ? 30 : 12,
-      con: s.con || 8, vib: s.vib || 12,
-    });
-  });
+  // Balance de blancos: corrige la mitad del tinte, así no se pierde la calidez de un salón
+  let temp = 0, tint = 0;
+  if (nn > L.length * 0.02) {
+    const r = sr/nn, g = sg/nn, b = sb/nn;
+    temp = clamp((b - r) / (0.28*(b + r)) * 0.5, -0.25, 0.25) * 100;
+    tint = clamp((1 - ((r + b)/2) / g) / 0.22 * 0.3, -0.15, 0.15) * 100;
+  }
+  return {
+    exp: Math.round(ev*20)/20,
+    wh: Math.round(clamp((1 - w0) / 0.15 * 100 * 0.7, -30, 40)),
+    bl: Math.round(clamp(-b0 / 0.10 * 100 * 0.6, -25, 20)),
+    hi: bright / L.length > 0.02 ? -40 : -20,
+    sh: p25 < 0.22 ? 30 : 12,
+    temp: Math.round(temp), tint: Math.round(tint),
+  };
+}
+const STYLE_KEYS = ['con', 'vib', 'sat', 'cla', 'sharp', 'vig', 'bw'];
+
+function autoTone() {
+  const p = cur(); if (!p || !previewBitmap) return;
+  const a = analyze(previewBitmap);
+  p.auto = a;
+  change((s) => { Object.assign(s, a, { con: s.con || 8, vib: s.vib || 12 }); });
   toast('Ajuste automático aplicado');
+}
+
+// Auto a todas las seleccionadas: cada foto se analiza por separado (luz y balance de blancos)
+// y se le suma el estilo de la foto actual (contraste, intensidad, claridad, viñeta…).
+async function autoBatch() {
+  const base = cur(); if (!base) return;
+  const list = [...state.sel].map((i) => state.photos[i]);
+  if (list.length < 2) return toast('Seleccioná varias fotos en la tira de abajo (o "Seleccionar todas").');
+  const style = pick(base.s, STYLE_KEYS);
+  if (!style.con && !style.vib && !style.cla) Object.assign(style, { con: 8, vib: 12 });
+  const warm = base.s.temp - (base.auto?.temp ?? 0), green = base.s.tint - (base.auto?.tint ?? 0);
+  const btn = $('btn-auto-batch'); btn.disabled = true;
+  let n = 0;
+  for (const p of list) {
+    try {
+      let img = null;
+      const { thumb } = await readExif(p.file);
+      if (thumb) img = await createImageBitmap(thumb);
+      else img = await createImageBitmap(p.file, { resizeWidth: 256, resizeQuality: 'low' });
+      const a = analyze(img); img.close?.();
+      p.hist.push(structuredClone(p.s));
+      p.auto = a;
+      Object.assign(p.s, a, structuredClone(style), { temp: a.temp + warm, tint: a.tint + green });
+      save(p);
+    } catch (e) { console.error(p.name, e); }
+    n++;
+    btn.textContent = `Analizando ${n} de ${list.length}…`;
+  }
+  btn.disabled = false; btn.textContent = '✨ Auto a las seleccionadas';
+  syncSliders(); draw(); refreshStrip();
+  toast(`Listo: ${n} fotos corregidas, cada una según su luz`);
 }
 
 // ---------------------------------------------------------------- presets
@@ -681,6 +735,7 @@ $('btn-resume').addEventListener('click', resumeFolder);
 $('btn-prev').addEventListener('click', () => selectPhoto(state.cur - 1));
 $('btn-next').addEventListener('click', () => selectPhoto(state.cur + 1));
 $('btn-auto').addEventListener('click', autoTone);
+$('btn-auto-batch').addEventListener('click', autoBatch);
 $('btn-reset').addEventListener('click', () => change((s) => { Object.assign(s, freshSettings()); }));
 $('btn-undo').addEventListener('click', undo);
 $('chk-bw').addEventListener('change', (e) => change((s) => { s.bw = e.target.checked; }));

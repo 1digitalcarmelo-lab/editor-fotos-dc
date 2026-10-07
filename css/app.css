@@ -63,6 +63,7 @@ select { flex: 1; min-width: 0; background: #0f0e20; color: var(--ink); border: 
 .check { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 13px; color: var(--soft); cursor: pointer; }
 .check input { accent-color: var(--gold); }
 .sync .row { margin-top: 8px; }
+.btn.full { width: 100%; margin-top: 12px; }
 
 .sl { margin: 4px 0 9px; }
 .sl-head { display: flex; justify-content: space-between; align-items: baseline; font-size: 12.5px; }
