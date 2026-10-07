@@ -5,8 +5,13 @@ import * as store from './store.js';
 import { PRINCIPAL_LOGO, MOSCA_LOGO } from './branding.js';
 
 const $ = (id) => document.getElementById(id);
-document.querySelectorAll('.brand-logo, .hero-logo').forEach((img) => { img.src = PRINCIPAL_LOGO; });
-document.querySelectorAll('link[rel="icon"], link[rel="apple-touch-icon"]').forEach((link) => { link.href = MOSCA_LOGO; });
+// Usar los archivos estáticos del mismo deploy evita recortes y problemas de caché
+// de data-URLs gigantes en algunos navegadores.
+document.querySelectorAll('.brand-logo, .hero-logo').forEach((img) => {
+  img.src = `assets-logo-principal.png?v=4`;
+  img.style.objectFit = 'contain'; img.style.objectPosition = 'center';
+});
+document.querySelectorAll('link[rel="icon"], link[rel="apple-touch-icon"]').forEach((link) => { link.href = `icons/logo-mosca.png?v=4`; });
 const PREVIEW_MAX = 2560;
 const EXTS = /\.(jpe?g|png|webp)$/i;
 const TONE_KEYS = ['exp', 'con', 'hi', 'sh', 'wh', 'bl', 'temp', 'tint', 'vib', 'sat', 'cla', 'sharp', 'vig', 'dehaze', 'noise', 'distortion', 'fisheye', 'bw'];
@@ -490,11 +495,14 @@ function renderMaskOverlay() {
     shape.style.top = `${cr.top - vr.top + (1 - m.y - (m.h || .25)) * cr.height}px`;
     shape.style.width = `${mw}px`; shape.style.height = `${mh}px`; shape.style.transform = `rotate(${(m.rotation || 0) * 180 / Math.PI}deg)`;
     shape.dataset.i = i;
-    shape.innerHTML = '<span class="mask-handle se"></span><span class="mask-handle rotate"></span>';
+    shape.innerHTML = m.kind === 'linear'
+      ? '<span class="mask-handle rotate"></span>'
+      : '<span class="mask-handle w"></span><span class="mask-handle e"></span><span class="mask-handle se"></span>';
     shape.addEventListener('pointerdown', (e) => {
       e.stopPropagation(); state.selectedMask = i;
       document.querySelectorAll('.mask-shape').forEach((el) => el.classList.toggle('selected', el === shape));
-      const type = e.target.closest('.mask-handle')?.classList.contains('se') ? 'resize' : e.target.closest('.mask-handle')?.classList.contains('rotate') ? 'rotate' : 'move';
+      const handle = e.target.closest('.mask-handle');
+      const type = handle?.classList.contains('se') ? 'resize' : handle?.classList.contains('w') ? 'resize-left' : handle?.classList.contains('e') ? 'resize-right' : handle?.classList.contains('rotate') ? 'rotate' : 'move';
       maskDrag = { type, i, x: e.clientX, y: e.clientY, original: structuredClone(m), rect: cr };
     });
     host.appendChild(shape);
@@ -513,6 +521,12 @@ document.addEventListener('pointermove', (e) => {
     m.h = Math.max(.04, Math.min(.8, maskDrag.original.h + dh));
     m.x = Math.max(m.w, Math.min(1 - m.w, maskDrag.original.x + dw));
     m.y = Math.max(m.h, Math.min(1 - m.h, maskDrag.original.y - dh));
+  }
+  else if (maskDrag.type === 'resize-left' || maskDrag.type === 'resize-right') {
+    const side = maskDrag.type === 'resize-right' ? 1 : -1;
+    const dw = side * dx / (2 * r.width);
+    m.w = Math.max(.04, Math.min(.8, maskDrag.original.w + dw));
+    m.x = Math.max(m.w, Math.min(1 - m.w, maskDrag.original.x + side * dw));
   }
   else { m.rotation = Math.atan2(e.clientY - r.top - r.height/2, e.clientX - r.left - r.width/2) + Math.PI/2; }
   renderMaskOverlay(); draw();

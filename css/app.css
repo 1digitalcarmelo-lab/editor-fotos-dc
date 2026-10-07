@@ -52,7 +52,10 @@ button:disabled { opacity: .45; cursor: default; }
 .mask-shape:not(.selected) { opacity: .38; }
 .mask-handle { position: absolute; width: 13px; height: 13px; border-radius: 50%; background: var(--gold-soft); border: 2px solid #17152b; pointer-events: auto; }
 .mask-handle.se { right: -7px; bottom: -7px; cursor: nwse-resize; }
+.mask-handle.w { left: -7px; top: calc(50% - 6px); cursor: ew-resize; }
+.mask-handle.e { right: -7px; top: calc(50% - 6px); cursor: ew-resize; }
 .mask-handle.rotate { left: calc(50% - 6px); top: -30px; cursor: grab; }
+.mask-shape.linear .mask-handle.rotate { left: auto; right: -7px; top: calc(50% - 6px); cursor: grab; }
 .mask-shape::before { content: ""; position: absolute; left: 50%; top: -20px; height: 20px; border-left: 1px solid var(--gold); opacity: .8; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
