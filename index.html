@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Revelado DC · Editor de fotos por lote</title>
+<meta name="description" content="Editá cientos de fotos de un evento en el navegador: luces, sombras, color, presets y exportación por lote. Las fotos no se suben a ningún lado.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='30' fill='%2314122b'/%3E%3Ccircle cx='32' cy='32' r='16' fill='none' stroke='%23e2b866' stroke-width='5'/%3E%3Ccircle cx='32' cy='32' r='6' fill='%23e2b866'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="mark" aria-hidden="true"></span><div><b>Revelado DC</b><small>Editor de fotos por lote</small></div></div>
+  <div class="top-actions">
+    <button class="btn" id="btn-resume" hidden>↺ Seguir con la última carpeta</button>
+    <button class="btn" id="btn-folder">📁 Abrir carpeta</button>
+    <button class="btn ghost" id="btn-files">Elegir fotos</button>
+    <input type="file" id="file-input" accept="image/jpeg,image/png,image/webp" multiple hidden>
+    <button class="btn gold" id="btn-export" disabled>⇩ Exportar</button>
+  </div>
+</header>
+
+<main class="work">
+  <section class="stage" id="stage">
+    <div class="viewport" id="viewport">
+      <canvas id="view"></canvas>
+      <div class="crop-layer" id="crop-layer" hidden>
+        <div class="crop-box" id="crop-box">
+          <i class="grid"></i>
+          <span class="h nw" data-h="nw"></span><span class="h ne" data-h="ne"></span>
+          <span class="h sw" data-h="sw"></span><span class="h se" data-h="se"></span>
+        </div>
+      </div>
+      <div class="badge-before" id="badge-before" hidden>ANTES</div>
+      <div class="loading" id="loading" hidden><span></span></div>
+    </div>
+    <div class="empty" id="empty">
+      <div class="empty-card">
+        <span class="mark big" aria-hidden="true"></span>
+        <h1>Revelá tus fotos de un evento, todas juntas</h1>
+        <p>Abrí la carpeta con las fotos (JPG). Se editan acá en tu compu: <b>no se suben a ningún lado</b>.</p>
+        <div class="empty-actions">
+          <button class="btn gold" id="btn-folder-2">📁 Abrir carpeta</button>
+          <button class="btn ghost" id="btn-files-2">Elegir fotos</button>
+        </div>
+        <p class="muted">También podés arrastrar las fotos acá.</p>
+      </div>
+    </div>
+    <div class="stage-bar" id="stage-bar" hidden>
+      <button class="icon" id="btn-prev" title="Anterior (←)">‹</button>
+      <span class="name" id="photo-name"></span>
+      <button class="icon" id="btn-next" title="Siguiente (→)">›</button>
+      <span class="sep"></span>
+      <button class="btn small" id="btn-before" title="Mantené apretado o tocá \ para comparar">Antes / Después</button>
+    </div>
+  </section>
+
+  <aside class="panel" id="panel" hidden>
+    <div class="block">
+      <canvas id="histo" width="300" height="90"></canvas>
+      <div class="row gap">
+        <button class="btn small" id="btn-auto" title="Ajuste automático de luces">✨ Auto</button>
+        <button class="btn small ghost" id="btn-reset" title="Volver a la foto original">Restablecer</button>
+        <button class="btn small ghost" id="btn-undo" title="Deshacer (Ctrl+Z)">↶</button>
+      </div>
+    </div>
+
+    <div class="block">
+      <label class="lbl">Preset</label>
+      <div class="row gap">
+        <select id="preset-select"><option value="">Elegir un preset…</option></select>
+        <button class="btn small ghost" id="btn-save-preset" title="Guardar los ajustes de esta foto como preset">＋ Guardar</button>
+      </div>
+      <button class="link" id="btn-del-preset" hidden>Borrar este preset</button>
+    </div>
+
+    <div class="block">
+      <h3>Luz</h3>
+      <div id="sl-luz"></div>
+    </div>
+    <div class="block">
+      <h3>Color</h3>
+      <div id="sl-color"></div>
+      <label class="check"><input type="checkbox" id="chk-bw"> Blanco y negro</label>
+    </div>
+    <div class="block">
+      <h3>Presencia</h3>
+      <div id="sl-pres"></div>
+    </div>
+
+    <div class="block">
+      <h3>Recorte y enderezado</h3>
+      <div class="row gap">
+        <button class="btn small ghost" id="btn-rot-l" title="Girar a la izquierda">↺ 90°</button>
+        <button class="btn small ghost" id="btn-rot-r" title="Girar a la derecha">↻ 90°</button>
+        <button class="btn small" id="btn-crop" title="Recortar (R)">✂ Recortar</button>
+      </div>
+      <div id="sl-crop"></div>
+      <div class="row gap">
+        <select id="aspect-select">
+          <option value="libre">Proporción libre</option>
+          <option value="orig">Original</option>
+          <option value="3:2">3:2 · 10×15 / 20×30</option>
+          <option value="7:5">7:5 · 13×18</option>
+          <option value="5:4">5:4 · 20×25</option>
+          <option value="4:3">4:3</option>
+          <option value="1:1">1:1 · cuadrada</option>
+          <option value="4:5">4:5 · Instagram</option>
+          <option value="16:9">16:9</option>
+          <option value="9:16">9:16 · historias</option>
+        </select>
+        <button class="btn small ghost" id="btn-aspect-flip" title="Vertical / horizontal">⇄</button>
+      </div>
+    </div>
+
+    <div class="block sync">
+      <h3>Aplicar a otras fotos</h3>
+      <p class="muted" id="sel-info">Seleccioná varias en la tira de abajo (Ctrl o Shift + clic).</p>
+      <div class="row gap wrap">
+        <button class="btn small" id="btn-copy" title="Copiar ajustes (Ctrl+C)">Copiar ajustes</button>
+        <button class="btn small" id="btn-paste" title="Pegar en las seleccionadas (Ctrl+V)" disabled>Pegar</button>
+        <button class="btn small gold" id="btn-sync" title="Aplicar los ajustes de esta foto a todas las seleccionadas" disabled>Sincronizar</button>
+      </div>
+      <label class="check"><input type="checkbox" id="chk-sync-crop"> Incluir recorte y giro</label>
+    </div>
+  </aside>
+</main>
+
+<footer class="strip" id="strip" hidden>
+  <div class="strip-bar">
+    <span id="strip-count"></span>
+    <button class="link" id="btn-sel-all">Seleccionar todas</button>
+    <button class="link" id="btn-sel-none">Solo esta</button>
+    <button class="link" id="btn-sel-edited">Las editadas</button>
+  </div>
+  <div class="thumbs" id="thumbs"></div>
+</footer>
+
+<div class="modal" id="modal" hidden>
+  <div class="modal-card" id="modal-card"></div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
