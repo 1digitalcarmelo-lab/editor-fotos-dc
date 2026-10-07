@@ -5,15 +5,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Revelado DC · Editor de fotos por lote</title>
 <meta name="description" content="Editá cientos de fotos de un evento en el navegador: luces, sombras, color, presets y exportación por lote. Las fotos no se suben a ningún lado.">
-<link rel="icon" type="image/png" href="https://raw.githubusercontent.com/1digitalcarmelo-lab/editor-fotos-dc/feature/revelado-dc-v2/icons/logo-mosca.png">
+<link rel="icon" type="image/png" href="https://github.com/1digitalcarmelo-lab/editor-fotos-dc/raw/refs/heads/feature/revelado-dc-v2/icons/logo-mosca.png">
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="theme-color" content="#15142a">
-<link rel="apple-touch-icon" href="https://raw.githubusercontent.com/1digitalcarmelo-lab/editor-fotos-dc/feature/revelado-dc-v2/icons/logo-mosca.png">
+<link rel="apple-touch-icon" href="https://github.com/1digitalcarmelo-lab/editor-fotos-dc/raw/refs/heads/feature/revelado-dc-v2/icons/logo-mosca.png">
 <link rel="stylesheet" href="css/app.css">
 </head>
 <body>
 <header class="top">
-  <div class="brand"><img class="brand-logo" src="https://raw.githubusercontent.com/1digitalcarmelo-lab/editor-fotos-dc/feature/revelado-dc-v2/assets-logo-principal.png" alt="Digital Carmelo" width="52" height="52"><div><b>Revelado DC</b><small>Editor de fotos por lote</small></div></div>
+  <div class="brand"><img class="brand-logo" src="https://github.com/1digitalcarmelo-lab/editor-fotos-dc/raw/refs/heads/feature/revelado-dc-v2/assets-logo-principal.png" alt="Digital Carmelo" width="52" height="52"><div><b>Revelado DC</b><small>Editor de fotos por lote</small></div></div>
   <div class="top-actions">
     <button class="btn ghost" id="btn-install" hidden title="Instalarlo en la compu, con ícono propio">⊕ Instalar</button>
     <button class="btn ghost" id="btn-backup" title="Copia de seguridad de tus ediciones">💾 Copia de ajustes</button>
@@ -38,10 +38,11 @@
       </div>
       <div class="badge-before" id="badge-before" hidden>ANTES</div>
       <div class="loading" id="loading" hidden><span></span></div>
+      <div class="mask-overlay" id="mask-overlay" aria-hidden="true"></div>
     </div>
     <div class="empty" id="empty">
       <div class="empty-card">
-        <img class="hero-logo" src="https://raw.githubusercontent.com/1digitalcarmelo-lab/editor-fotos-dc/feature/revelado-dc-v2/assets-logo-principal.png" alt="Digital Carmelo" width="150" height="150">
+        <img class="hero-logo" src="https://github.com/1digitalcarmelo-lab/editor-fotos-dc/raw/refs/heads/feature/revelado-dc-v2/assets-logo-principal.png" alt="Digital Carmelo" width="150" height="150">
         <h1>Revelá tus fotos de un evento, todas juntas</h1>
         <p>Abrí la carpeta con las fotos (JPG). Se editan acá en tu compu: <b>no se suben a ningún lado</b>.</p>
         <div class="empty-actions">
@@ -61,6 +62,7 @@
       <button class="btn small ghost" id="btn-zoom-in" title="Acercar">＋</button>
       <button class="btn small ghost" id="btn-zoom-fit" title="Ajustar a pantalla">Ajustar</button>
       <button class="btn small ghost" id="btn-duplicate" title="Crear una copia de esta foto en la sesión">Duplicar</button>
+      <button class="btn small ghost" id="btn-remove-photo" title="Quitar esta foto de la sesión">Quitar</button>
       <button class="btn small ghost" id="btn-guides" title="Mostrar guías de alineación">Guías</button>
       <button class="btn small" id="btn-before" title="Mantené apretado o tocá \ para comparar">Antes / Después</button>
     </div>
@@ -83,6 +85,10 @@
         <select id="preset-select"><option value="">Elegir un preset…</option></select>
         <button class="btn small ghost" id="btn-save-preset" title="Guardar los ajustes de esta foto como preset">＋ Guardar</button>
       </div>
+      <div class="row gap wrap preset-actions">
+        <button class="btn small ghost" id="btn-preset-mix" disabled>＋ Combinar con actual</button>
+      </div>
+      <div id="preset-history" class="preset-history"></div>
       <button class="link" id="btn-del-preset" hidden>Borrar este preset</button>
     </div>
 
