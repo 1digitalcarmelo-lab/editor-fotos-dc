@@ -700,13 +700,14 @@ function renderMasks() {
   state.selectedMask = Math.min(state.selectedMask, masks.length - 1);
   masks.forEach((m, i) => {
     const b = document.createElement('button'); b.className = `mask-chip ${i === state.selectedMask ? 'on' : ''}`;
-    b.textContent = `${m.kind === 'linear' ? '▰' : '◉'} ${i + 1}`; b.title = 'Seleccionar máscara';
-    b.onclick = () => { state.selectedMask = i; renderMasks(); }; list.appendChild(b);
+    b.textContent = `${m.kind === 'linear' ? '▰' : '◉'} ${i + 1}`; b.title = 'Tocá para editar esta máscara (de nuevo para soltarla)';
+    b.onclick = () => { state.selectedMask = state.selectedMask === i ? -1 : i; renderMasks(); }; list.appendChild(b);
   });
   $('btn-mask-delete').disabled = state.selectedMask < 0 || state.selectedMask >= masks.length;
   $('btn-mask-done').hidden = $('btn-mask-delete').disabled;
   host.innerHTML = '';
-  const m = masks[state.selectedMask]; if (!m) return;
+  const m = masks[state.selectedMask];
+  if (!m) { renderMaskOverlay(); return; } // sin máscara elegida: se borra el dibujo de la foto
   const add = (key, label, min, max, step) => {
     const wrap = document.createElement('div'); wrap.className = 'sl'; const v = m.tone[key] || 0;
     wrap.innerHTML = `<div class="sl-head"><label>${label}</label><output>${v > 0 ? '+' : ''}${v}</output></div><input type="range" min="${min}" max="${max}" step="${step}" value="${v}">`;
@@ -848,7 +849,9 @@ function renderMaskOverlay() {
   const f = maskFrame(); if (!f.w || !f.h) return;
   host.classList.toggle('passive', !!state.redEyeMode);
   const svg = svgEl('svg', { class: 'mask-svg' }, host);
-  masks.forEach((m, i) => (m.kind === 'linear' ? drawLinearMask : drawRadialMask)(host, svg, m, i, i === state.selectedMask, f));
+  // Solo se dibuja la máscara que estás editando (la elegís tocando su número en el panel)
+  const sel = masks[state.selectedMask];
+  if (sel) (sel.kind === 'linear' ? drawLinearMask : drawRadialMask)(host, svg, sel, state.selectedMask, true, f);
 }
 function viewportPoint(e) { const vr = $('viewport').getBoundingClientRect(); return [e.clientX - vr.left, e.clientY - vr.top]; }
 $('mask-overlay').addEventListener('pointerdown', (e) => {
@@ -917,7 +920,7 @@ function addMask(kind) {
 }
 $('btn-mask-radial').addEventListener('click', () => addMask('radial'));
 $('btn-mask-linear').addEventListener('click', () => addMask('linear'));
-$('btn-mask-done').addEventListener('click', () => { state.selectedMask = -1; renderMasks(); toast('Máscara lista. Para volver a editarla tocá su punto en la foto o su número acá.'); });
+$('btn-mask-done').addEventListener('click', () => { state.selectedMask = -1; renderMasks(); toast('Máscara lista. Para volver a editarla tocá su número en «Edición local».'); });
 $('btn-mask-delete').addEventListener('click', () => { const p = cur(); if (!p || state.selectedMask < 0) return; p.hist.push(structuredClone(p.s)); p.s.masks.splice(state.selectedMask, 1); state.selectedMask = Math.min(state.selectedMask, p.s.masks.length - 1); renderMasks(); draw(); save(p); refreshStrip(); });
 
 // Historial (deshacer) y guardado
