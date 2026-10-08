@@ -46,17 +46,22 @@ button:disabled { opacity: .45; cursor: default; }
 .badge-before { position: absolute; top: 14px; left: 14px; background: rgba(0,0,0,.65); border: 1px solid var(--gold); color: var(--gold); font-weight: 800; letter-spacing: .2em; font-size: 11px; padding: 5px 10px; border-radius: 999px; }
 .loading { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; }
 .loading span { width: 34px; height: 34px; border: 3px solid rgba(226,184,102,.25); border-top-color: var(--gold); border-radius: 50%; animation: spin .8s linear infinite; }
-.mask-overlay { position: absolute; inset: 0; pointer-events: none; }
-.mask-shape { position: absolute; border: 2px solid var(--gold); border-radius: 50%; background: radial-gradient(ellipse, rgba(226,184,102,.12), rgba(226,184,102,.03) 55%, transparent 72%); box-shadow: 0 0 0 1px rgba(0,0,0,.55), 0 0 20px rgba(226,184,102,.2); pointer-events: auto; cursor: move; touch-action: none; }
-.mask-shape.linear { border-radius: 6px; border-style: dashed; background: repeating-linear-gradient(90deg, rgba(226,184,102,.09), rgba(226,184,102,.09) 8px, transparent 8px, transparent 16px); }
-.mask-shape:not(.selected) { opacity: .38; }
-.mask-handle { position: absolute; width: 13px; height: 13px; border-radius: 50%; background: var(--gold-soft); border: 2px solid #17152b; pointer-events: auto; }
-.mask-handle.se { right: -7px; bottom: -7px; cursor: nwse-resize; }
-.mask-handle.w { left: -7px; top: calc(50% - 6px); cursor: ew-resize; }
-.mask-handle.e { right: -7px; top: calc(50% - 6px); cursor: ew-resize; }
-.mask-handle.rotate { left: calc(50% - 6px); top: -30px; cursor: grab; }
-.mask-shape.linear .mask-handle.rotate { left: auto; right: -7px; top: calc(50% - 6px); cursor: grab; }
-.mask-shape::before { content: ""; position: absolute; left: 50%; top: -20px; height: 20px; border-left: 1px solid var(--gold); opacity: .8; }
+.mask-overlay { position: absolute; inset: 0; pointer-events: none; z-index: 3; }
+.mask-overlay.passive, .mask-overlay.passive * { pointer-events: none !important; }
+.mask-svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+.mask-svg .mask-body { fill: rgba(226,184,102,.07); pointer-events: all; cursor: move; touch-action: none; }
+.mask-svg .mask-edge { fill: none; stroke: var(--gold); stroke-width: 2; filter: drop-shadow(0 0 1.5px rgba(0,0,0,.9)); vector-effect: non-scaling-stroke; }
+.mask-svg .mask-edge.dim { stroke-opacity: .45; stroke-dasharray: 5 5; }
+.mask-svg .mask-feather { fill: none; stroke: var(--gold-soft); stroke-width: 1; stroke-dasharray: 4 4; stroke-opacity: .8; }
+.mask-svg .mask-stem { stroke: var(--gold); stroke-width: 1.5; stroke-opacity: .85; }
+.mask-handle { position: absolute; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%; background: var(--gold-soft); border: 2px solid #17152b; box-shadow: 0 0 0 1px rgba(226,184,102,.5), 0 1px 4px rgba(0,0,0,.6); pointer-events: auto; touch-action: none; }
+.mask-handle::after { content: ""; position: absolute; inset: -9px; border-radius: 50%; } /* zona de agarre más grande */
+.mask-handle.pin { width: 18px; height: 18px; margin: -9px 0 0 -9px; background: #17152b; border: 2px solid var(--gold); }
+.mask-handle.pin.on { background: var(--gold); border-color: #17152b; box-shadow: 0 0 0 2px var(--gold), 0 1px 6px rgba(0,0,0,.7); }
+.mask-handle.pin:not(.on) { opacity: .75; cursor: pointer !important; }
+.mask-handle.rot { background: #17152b; border-color: var(--gold-soft); cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M19 12a7 7 0 1 1-2.05-4.95' fill='none' stroke='%23000' stroke-width='4' stroke-linecap='round'/%3E%3Cpath d='M19 12a7 7 0 1 1-2.05-4.95' fill='none' stroke='%23f3d48f' stroke-width='2' stroke-linecap='round'/%3E%3Cpath d='M18.5 2.5v5h-5' fill='none' stroke='%23000' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M18.5 2.5v5h-5' fill='none' stroke='%23f3d48f' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") 12 12, grab; }
+.mask-handle.rot:active { cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M19 12a7 7 0 1 1-2.05-4.95' fill='none' stroke='%23000' stroke-width='4' stroke-linecap='round'/%3E%3Cpath d='M19 12a7 7 0 1 1-2.05-4.95' fill='none' stroke='%23f3d48f' stroke-width='2' stroke-linecap='round'/%3E%3Cpath d='M18.5 2.5v5h-5' fill='none' stroke='%23000' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M18.5 2.5v5h-5' fill='none' stroke='%23f3d48f' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") 12 12, grab; }
+.viewport.mask-dragging, .viewport.mask-dragging * { user-select: none; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 .empty { position: absolute; inset: 0; display: grid; place-items: center; padding: 24px; }

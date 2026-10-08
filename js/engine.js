@@ -97,15 +97,25 @@ void main(){
   for (int i = 0; i < 8; i++) {
     vec4 g = uMaskGeom[i];
     if (g.z <= 0.0) continue;
-    vec2 md = vUv - g.xy;
-    float cs = cos(uMaskMeta[i].x), sn = sin(uMaskMeta[i].x);
-    md = mat2(cs, -sn, sn, cs) * md;
     float mode = uMaskDetail[i].w;
     float linear = mod(mode, 2.0);
-    float feather = clamp(uMaskDetail[i].z, .005, .49);
-    float edge = max(.008, feather * .5);
-    float m = linear > .5 ? 1. - smoothstep(.5 - edge, .5 + edge, abs(md.x / max(g.z, .001)))
-      : 1. - smoothstep(.5 - edge, .5 + edge, length(md / max(g.zw, vec2(.001))));
+    float cs = cos(uMaskMeta[i].x), sn = sin(uMaskMeta[i].x);
+    // Posición relativa al centro (vUv va de arriba a la izquierda), en proporciones reales de la foto (unidad = alto del cuadro),
+    // así el giro de una elipse no la deforma y coincide con lo que se dibuja encima.
+    vec2 pd = (vUv - g.xy) * vec2(uAspect, 1.);
+    vec2 lp = vec2(cs*pd.x + sn*pd.y, -sn*pd.x + cs*pd.y);
+    float m;
+    if (linear > .5) {
+      vec2 md = mat2(cs, -sn, sn, cs) * (vUv - g.xy);
+      float edge = max(.008, clamp(uMaskDetail[i].z, .005, .49) * .5);
+      m = 1. - smoothstep(.5 - edge, .5 + edge, abs(md.x / max(g.z, .001)));
+    } else {
+      // Radial: g.z = radio horizontal (fracción del ancho), g.w = radio vertical (fracción del alto).
+      // Efecto pleno adentro, se desvanece hacia el borde de la elipse según la suavidad.
+      float fe = clamp(uMaskDetail[i].z, .02, 1.);
+      float r = length(lp / max(vec2(g.z * uAspect, g.w), vec2(.0005)));
+      m = 1. - smoothstep(1. - fe, 1., r);
+    }
     if (mode > 1.5) m = 1. - m;
     vec4 t = uMaskTone[i], c = uMaskColor[i], d = uMaskDetail[i];
     vec3 lm = q * exp2(vec3(t.x * m));
@@ -314,7 +324,7 @@ export class Engine {
       gl.uniform4f(u.uMaskMeta[i], m.rotation ?? 0, 0, 0, 0);
       gl.uniform4f(u.uMaskTone[i], t.exp || 0, (t.con || 0)/100, (t.hi || 0)/100, (t.sh || 0)/100);
       gl.uniform4f(u.uMaskColor[i], (t.sat || 0)/100, (t.vib || 0)/100, (t.temp || 0)/100, (t.tint || 0)/100);
-      gl.uniform4f(u.uMaskDetail[i], (t.cla || 0)/100, (t.blur || 0)/100, m.feather ?? .12, (m.kind === 'linear' ? 1 : 0) + (m.invert ? 2 : 0));
+      gl.uniform4f(u.uMaskDetail[i], (t.cla || 0)/100, (t.blur || 0)/100, m.feather ?? (m.kind === 'linear' ? .12 : .28), (m.kind === 'linear' ? 1 : 0) + (m.invert ? 2 : 0));
     }
     this.#quad(p, fbo ? 1 : -1);
   }

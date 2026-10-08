@@ -394,13 +394,14 @@ $('viewport').addEventListener('wheel', (e) => {
   state.zoom = Math.max(.25, Math.min(4, +(state.zoom * (e.deltaY < 0 ? 1.1 : .9)).toFixed(2))); draw();
 }, { passive: false });
 $('viewport').addEventListener('pointerdown', (e) => {
-  if (state.cropMode || state.zoom <= 1) return;
+  if (state.cropMode || state.zoom <= 1 || maskDrag || e.target.closest('[data-drag]')) return;
   panDrag = { x: e.clientX, y: e.clientY, px: state.panX, py: state.panY }; e.currentTarget.setPointerCapture(e.pointerId);
 });
 $('viewport').addEventListener('pointermove', (e) => {
   if (!panDrag) return; state.panX = panDrag.px + e.clientX - panDrag.x; state.panY = panDrag.py + e.clientY - panDrag.y; draw();
 });
 $('viewport').addEventListener('pointerup', () => { panDrag = null; });
+$('viewport').addEventListener('pointercancel', () => { panDrag = null; });
 
 // ---------------------------------------------------------------- deslizadores
 const sliderEls = {};
@@ -474,70 +475,148 @@ function renderMasks() {
   };
   MASK_KEYS.forEach((x) => add(...x));
   const opts = document.createElement('label'); opts.className = 'check'; opts.innerHTML = `<input type="checkbox" ${m.invert ? 'checked' : ''}> Invertir máscara`;
-  opts.querySelector('input').onchange = (e) => { m.invert = e.target.checked; draw(); save(cur()); renderMaskOverlay(); }; host.appendChild(opts);
-  const feather = document.createElement('div'); feather.className = 'sl'; feather.innerHTML = `<div class="sl-head"><label>Suavidad / feather</label><output>${Math.round((m.feather ?? .12) * 100)}%</output></div><input type="range" min="0" max="100" value="${Math.round((m.feather ?? .12) * 100)}">`;
-  feather.querySelector('input').oninput = (e) => { m.feather = +e.target.value / 100; feather.querySelector('output').textContent = `${e.target.value}%`; renderMaskOverlay(); draw(); save(cur()); };
-  host.appendChild(feather);
+  opts.querySelector('input').onchange = (e) => { m.invert = e.target.checked; draw(); save(cur()); refreshStrip(); }; host.appendChild(opts);
+  if (m.kind !== 'linear') {
+    const lock = document.createElement('label'); lock.className = 'check'; lock.innerHTML = `<input type="checkbox" ${m.lockCircle ? 'checked' : ''}> Mantener círculo`;
+    lock.querySelector('input').onchange = (e) => {
+      m.lockCircle = e.target.checked;
+      if (m.lockCircle) { const f = maskFrame(); if (f.w && f.h) { const r = Math.sqrt(m.w * f.w * m.h * f.h); m.w = r / f.w; m.h = r / f.h; } }
+      draw(); save(cur());
+    };
+    host.appendChild(lock);
+    const fv = Math.round(radialFeather(m) * 100);
+    const feather = document.createElement('div'); feather.className = 'sl'; feather.innerHTML = `<div class="sl-head"><label>Suavidad del borde</label><output>${fv}%</output></div><input type="range" min="2" max="100" value="${fv}">`;
+    feather.querySelector('input').oninput = (e) => { m.feather = +e.target.value / 100; feather.querySelector('output').textContent = `${e.target.value}%`; draw(); save(cur()); };
+    host.appendChild(feather);
+  }
+  const tip = document.createElement('p'); tip.className = 'muted'; tip.textContent = m.kind === 'linear'
+    ? 'En la foto: arrastrá la línea del medio para moverla, las líneas de afuera para la transición y el punto redondo para girarla.'
+    : 'En la foto: arrastrá el centro para moverla, los puntos del borde para el tamaño y el de arriba para girarla.';
+  host.appendChild(tip);
   renderMaskOverlay();
 }
 
+// ---------------------------------------------------------------- máscaras: capa gráfica editable
+// La máscara es un objeto dibujado ENCIMA de la foto (SVG + tiradores). Arrastrarla nunca mueve la foto.
+// Coordenadas guardadas (las mismas que usa el motor): m.x, m.y = centro en el cuadro final, 0..1, desde arriba a la izquierda.
+// Radial: m.w = radio horizontal (fracción del ancho), m.h = radio vertical (fracción del alto),
+// m.rotation = giro en radianes (horario, como en pantalla), m.feather = suavidad del borde (0..1), m.lockCircle = mantener círculo.
 let maskDrag = null;
-function renderMaskOverlay() {
-  const host = $('mask-overlay'), p = cur(), cv = $('view'), vp = $('viewport');
-  if (!host || !p || !cv || maskDrag) return;
-  host.innerHTML = '';
-  const cr = cv.getBoundingClientRect(), vr = vp.getBoundingClientRect();
-  const masks = p.s.masks || [];
-  masks.forEach((m, i) => {
-    const shape = document.createElement('div'); shape.className = `mask-shape ${m.kind === 'linear' ? 'linear' : ''} ${i === state.selectedMask ? 'selected' : ''}`;
-    const mw = Math.max(28, (m.w || .25) * 2 * cr.width), mh = Math.max(28, (m.h || .25) * 2 * cr.height);
-    shape.style.left = `${cr.left - vr.left + (m.x - (m.w || .25)) * cr.width}px`;
-    shape.style.top = `${cr.top - vr.top + (1 - m.y - (m.h || .25)) * cr.height}px`;
-    shape.style.width = `${mw}px`; shape.style.height = `${mh}px`; shape.style.transform = `rotate(${(m.rotation || 0) * 180 / Math.PI}deg)`;
-    shape.dataset.i = i;
-    shape.innerHTML = m.kind === 'linear'
-      ? '<span class="mask-handle rotate"></span>'
-      : '<span class="mask-handle w"></span><span class="mask-handle e"></span><span class="mask-handle se"></span>';
-    shape.addEventListener('pointerdown', (e) => {
-      e.stopPropagation(); state.selectedMask = i;
-      document.querySelectorAll('.mask-shape').forEach((el) => el.classList.toggle('selected', el === shape));
-      const handle = e.target.closest('.mask-handle');
-      const type = handle?.classList.contains('se') ? 'resize' : handle?.classList.contains('w') ? 'resize-left' : handle?.classList.contains('e') ? 'resize-right' : handle?.classList.contains('rotate') ? 'rotate' : 'move';
-      maskDrag = { type, i, x: e.clientX, y: e.clientY, original: structuredClone(m), rect: cr };
-    });
-    host.appendChild(shape);
-  });
+const SVGNS = 'http://www.w3.org/2000/svg';
+const clampN = (v, a, b) => Math.max(a, Math.min(b, v));
+const normAngle = (a) => { a %= 2 * Math.PI; if (a > Math.PI) a -= 2 * Math.PI; if (a < -Math.PI) a += 2 * Math.PI; return a; };
+function maskFrame() {
+  const cv = $('view'), vp = $('viewport'); const cr = cv.getBoundingClientRect(), vr = vp.getBoundingClientRect();
+  return { left: cr.left - vr.left, top: cr.top - vr.top, w: cr.width, h: cr.height };
 }
-document.addEventListener('pointermove', (e) => {
-  if (!maskDrag) return;
-  const p = cur(), m = p?.s.masks?.[maskDrag.i]; if (!m) return;
-  const dx = e.clientX - maskDrag.x, dy = e.clientY - maskDrag.y, r = maskDrag.rect;
-  if (maskDrag.type === 'move') { m.x = Math.max(0, Math.min(1, maskDrag.original.x + dx / r.width)); m.y = Math.max(0, Math.min(1, maskDrag.original.y - dy / r.height)); }
-  else if (maskDrag.type === 'resize') {
-    // El tirador inferior derecho mantiene fijo el ángulo opuesto: el centro
-    // acompaña al cursor para que el óvalo no parezca moverse al revés.
-    const dw = dx / (2 * r.width), dh = dy / (2 * r.height);
-    m.w = Math.max(.04, Math.min(.8, maskDrag.original.w + dw));
-    m.h = Math.max(.04, Math.min(.8, maskDrag.original.h + dh));
-    m.x = Math.max(m.w, Math.min(1 - m.w, maskDrag.original.x + dw));
-    m.y = Math.max(m.h, Math.min(1 - m.h, maskDrag.original.y - dh));
+function maskScreen(m, f) {
+  const th = m.rotation || 0;
+  return { cx: f.left + m.x * f.w, cy: f.top + m.y * f.h, rx: (m.w ?? .25) * f.w, ry: (m.h ?? .25) * f.h, th,
+    // ejes locales de la máscara en pantalla: ux = "derecha" de la máscara, uy = "arriba" de la máscara
+    ux: [Math.cos(th), Math.sin(th)], uy: [Math.sin(th), -Math.cos(th)] };
+}
+function svgEl(tag, attrs, parent) { const el = document.createElementNS(SVGNS, tag); for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v); parent.appendChild(el); return el; }
+function resizeCursor(screenAngle) {
+  const a = ((screenAngle * 180 / Math.PI) % 180 + 180) % 180;
+  return a < 22.5 || a >= 157.5 ? 'ew-resize' : a < 67.5 ? 'nesw-resize' : a < 112.5 ? 'ns-resize' : 'nwse-resize';
+}
+function maskHandle(host, x, y, cls, title, drag, i, cursor) {
+  const h = document.createElement('span'); h.className = `mask-handle ${cls}`;
+  h.style.left = `${x}px`; h.style.top = `${y}px`; h.title = title; h.dataset.drag = drag; h.dataset.i = i;
+  if (cursor) h.style.cursor = cursor;
+  host.appendChild(h); return h;
+}
+const radialFeather = (m) => clampN(m.feather ?? .28, .02, 1);
+function drawRadialMask(host, svg, m, i, sel, f) {
+  const s = maskScreen(m, f);
+  const g = svgEl('g', { transform: `translate(${s.cx} ${s.cy}) rotate(${s.th * 180 / Math.PI})`, class: `mask-g ${sel ? 'sel' : ''}` }, svg);
+  if (sel) {
+    svgEl('ellipse', { rx: s.rx, ry: s.ry, class: 'mask-body', 'data-drag': 'move', 'data-i': i }, g);
+    const k = 1 - radialFeather(m);
+    if (k > .02) svgEl('ellipse', { rx: s.rx * k, ry: s.ry * k, class: 'mask-feather' }, g);
+    svgEl('ellipse', { rx: s.rx, ry: s.ry, class: 'mask-edge' }, g);
+    svgEl('line', { x1: 0, y1: -s.ry, x2: 0, y2: -s.ry - 28, class: 'mask-stem' }, g);
+  } else svgEl('ellipse', { rx: s.rx, ry: s.ry, class: 'mask-edge dim' }, g);
+  const at = (a, b) => [s.cx + s.ux[0] * a + s.uy[0] * b, s.cy + s.ux[1] * a + s.uy[1] * b];
+  maskHandle(host, s.cx, s.cy, `pin ${sel ? 'on' : ''}`, sel ? 'Arrastrá para mover la máscara' : 'Seleccionar máscara', 'move', i, 'move');
+  if (!sel) return;
+  const curX = resizeCursor(s.th), curY = resizeCursor(s.th + Math.PI / 2);
+  for (const [a, b, d, c, t] of [[s.rx, 0, 'rx', curX, 'Ancho'], [-s.rx, 0, 'rx', curX, 'Ancho'], [0, s.ry, 'ry', curY, 'Alto'], [0, -s.ry, 'ry', curY, 'Alto']]) {
+    const [x, y] = at(a, b); maskHandle(host, x, y, 'size', `${t} (arrastrá)`, d, i, c);
   }
-  else if (maskDrag.type === 'resize-left' || maskDrag.type === 'resize-right') {
-    const side = maskDrag.type === 'resize-right' ? 1 : -1;
-    const dw = side * dx / (2 * r.width);
-    m.w = Math.max(.04, Math.min(.8, maskDrag.original.w + dw));
-    m.x = Math.max(m.w, Math.min(1 - m.w, maskDrag.original.x + side * dw));
-  }
-  else { m.rotation = Math.atan2(e.clientY - r.top - r.height/2, e.clientX - r.left - r.width/2) + Math.PI/2; }
-  renderMaskOverlay(); draw();
+  const [x, y] = at(0, s.ry + 28); maskHandle(host, x, y, 'rot', 'Girar (con Shift, de a 15°)', 'rotate', i);
+}
+function drawLinearMask(host, svg, m, i, sel, f) {
+  // (se reemplaza en el commit de la máscara lineal)
+  const s = maskScreen(m, f);
+  maskHandle(host, s.cx, s.cy, `pin ${sel ? 'on' : ''}`, 'Arrastrá para mover la máscara', 'move', i, 'move');
+}
+function renderMaskOverlay() {
+  const host = $('mask-overlay'); if (!host) return;
+  host.innerHTML = '';
+  const p = cur(), masks = p?.s.masks || [];
+  if (!p || !previewBitmap || state.cropMode || state.before || !masks.length) return;
+  const f = maskFrame(); if (!f.w || !f.h) return;
+  host.classList.toggle('passive', !!state.redEyeMode);
+  const svg = svgEl('svg', { class: 'mask-svg' }, host);
+  masks.forEach((m, i) => (m.kind === 'linear' ? drawLinearMask : drawRadialMask)(host, svg, m, i, i === state.selectedMask, f));
+}
+function viewportPoint(e) { const vr = $('viewport').getBoundingClientRect(); return [e.clientX - vr.left, e.clientY - vr.top]; }
+$('mask-overlay').addEventListener('pointerdown', (e) => {
+  const t = e.target.closest('[data-drag]'); if (!t || e.button > 0) return;
+  // La máscara se queda con el gesto: ni pan de la foto, ni selección de texto, ni arrastre nativo.
+  e.preventDefault(); e.stopPropagation();
+  const p = cur(), i = +t.dataset.i, m = p?.s.masks?.[i]; if (!m) return;
+  if (state.selectedMask !== i) { state.selectedMask = i; renderMasks(); }
+  const f = maskFrame(), sc = maskScreen(m, f), [px, py] = viewportPoint(e);
+  const vx = px - sc.cx, vy = py - sc.cy;
+  const lx = vx * sc.ux[0] + vy * sc.ux[1], ly = vx * sc.uy[0] + vy * sc.uy[1];
+  maskDrag = { type: t.dataset.drag, i, id: e.pointerId, f, sx: px, sy: py, o: structuredClone(m), sc, lx, ly,
+    a0: Math.atan2(vy, vx), before: structuredClone(p.s), moved: false };
+  try { $('viewport').setPointerCapture(e.pointerId); } catch { /* sin captura igual funciona con window */ }
+  $('viewport').classList.add('mask-dragging');
 });
-document.addEventListener('pointerup', () => { if (maskDrag) { const p = cur(); maskDrag = null; if (p) { p.hist.push(structuredClone(p.s)); save(p); renderMaskOverlay(); } } });
+window.addEventListener('pointermove', (e) => {
+  const d = maskDrag; if (!d || e.pointerId !== d.id) return;
+  e.preventDefault();
+  const m = cur()?.s.masks?.[d.i]; if (!m) return;
+  const [px, py] = viewportPoint(e), { f, o, sc } = d;
+  const vx = px - sc.cx, vy = py - sc.cy;
+  const lx = vx * sc.ux[0] + vy * sc.ux[1], ly = vx * sc.uy[0] + vy * sc.uy[1];
+  d.moved = true;
+  if (d.type === 'move') {
+    m.x = clampN(o.x + (px - d.sx) / f.w, -.25, 1.25); m.y = clampN(o.y + (py - d.sy) / f.h, -.25, 1.25);
+  } else if (d.type === 'rx' || d.type === 'ry') {
+    // el tirador sigue al cursor sobre su propio eje (respeta el giro); el centro queda fijo
+    const r0 = d.type === 'rx' ? sc.rx : sc.ry, l0 = Math.abs(d.type === 'rx' ? d.lx : d.ly), l = Math.abs(d.type === 'rx' ? lx : ly);
+    const r = clampN(r0 + l - l0, 6, 3 * Math.max(f.w, f.h));
+    if (d.type === 'rx') m.w = r / f.w; else m.h = r / f.h;
+    if (m.lockCircle) { if (d.type === 'rx') m.h = r / f.h; else m.w = r / f.w; }
+  } else if (d.type === 'rotate') {
+    let a = (o.rotation || 0) + Math.atan2(vy, vx) - d.a0;
+    if (e.shiftKey) a = Math.round(a / (Math.PI / 12)) * (Math.PI / 12);
+    m.rotation = normAngle(a);
+  }
+  draw();
+}, { passive: false });
+function endMaskDrag(e) {
+  const d = maskDrag; if (!d || (e && e.pointerId !== d.id)) return;
+  maskDrag = null; $('viewport').classList.remove('mask-dragging');
+  try { $('viewport').releasePointerCapture(d.id); } catch { /* ya liberado */ }
+  const p = cur();
+  if (p && d.moved) { p.hist.push(d.before); if (p.hist.length > 60) p.hist.shift(); state.redo = []; save(p); refreshStrip(); }
+  renderMaskOverlay();
+}
+window.addEventListener('pointerup', endMaskDrag);
+window.addEventListener('pointercancel', endMaskDrag);
 function addMask(kind) {
   const p = cur(); if (!p) return;
   if (!Array.isArray(p.s.masks)) p.s.masks = [];
   if (p.s.masks.length >= 8) return toast('Podés usar hasta 8 máscaras por foto');
   p.hist.push(structuredClone(p.s));
-  p.s.masks.push({ kind, x: .5, y: .5, w: kind === 'linear' ? .75 : .25, h: kind === 'linear' ? .10 : .25, rotation: 0, feather: .28, tone: {} });
+  const f = maskFrame(), short = Math.min(f.w || 1, f.h || 1);
+  if (kind === 'linear') p.s.masks.push({ kind, x: .5, y: .5, w: .30, h: 0, rotation: 0, feather: 0, tone: {} });
+  else p.s.masks.push({ kind, x: .5, y: .5, w: f.w ? .22 * short / f.w : .22, h: f.h ? .22 * short / f.h : .22, rotation: 0, feather: .35, lockCircle: false, tone: {} });
   state.selectedMask = p.s.masks.length - 1; renderMasks(); draw(); save(p); refreshStrip();
 }
 $('btn-mask-radial').addEventListener('click', () => addMask('radial'));
@@ -984,6 +1063,7 @@ $('btn-remove-photo').addEventListener('click', () => {
 $('btn-guides').addEventListener('click', () => { $('viewport').classList.toggle('guides'); $('btn-guides').classList.toggle('on'); });
 $('btn-red-eye').addEventListener('click', () => {
   state.redEyeMode = !state.redEyeMode;
+  renderMaskOverlay();
   $('btn-red-eye').classList.toggle('on', state.redEyeMode);
   toast(state.redEyeMode ? 'Ojos rojos: hacé clic sobre cada pupila' : 'Corrección de ojos rojos desactivada');
 });
