@@ -331,7 +331,7 @@ function buildStrip() {
   box.innerHTML = '';
   thumbObserver?.disconnect();
   thumbObserver = new IntersectionObserver((entries) => {
-    for (const e of entries) if (e.isIntersecting) { queueThumb(+e.target.dataset.i); thumbObserver.unobserve(e.target); }
+    for (const e of entries) if (e.isIntersecting) { queueThumb(state.photos[+e.target.dataset.i]); thumbObserver.unobserve(e.target); }
   }, { root: box, rootMargin: '0px 600px' });
   const frag = document.createDocumentFragment();
   for (const p of state.photos) {
@@ -339,23 +339,40 @@ function buildStrip() {
     b.className = 'th'; b.dataset.i = p.i; b.title = p.name;
     b.innerHTML = `<span class="n">${p.i + 1}</span>`;
     frag.appendChild(b);
-    thumbObserver.observe(b);
+    // Si la miniatura ya existe (p. ej. después de Quitar o Duplicar) se vuelve a poner; si no, se genera al verla.
+    if (p.thumbUrl) attachThumb(b, p); else thumbObserver.observe(b);
   }
   box.appendChild(frag);
   refreshStrip();
 }
 
-function queueThumb(i) { thumbQueue.push(i); pumpThumbs(); }
+// La cola guarda la foto en sí (no su posición), así Quitar no desordena las miniaturas pendientes.
+function queueThumb(p) { if (p) { thumbQueue.push(p); pumpThumbs(); } }
 async function pumpThumbs() {
   while (thumbBusy < 3 && thumbQueue.length) {
-    const i = thumbQueue.shift();
+    const p = thumbQueue.shift();
     thumbBusy++;
-    makeThumb(state.photos[i]).finally(() => { thumbBusy--; pumpThumbs(); });
+    makeThumb(p).finally(() => { thumbBusy--; pumpThumbs(); });
   }
+}
+function attachThumb(el, p) {
+  if (!el || !p.thumbUrl || el.querySelector('img')) return;
+  const img = document.createElement('img');
+  img.src = p.thumbUrl; img.alt = ''; img.loading = 'lazy';
+  if (p.thumbRot) { img.style.transform = p.thumbRot; if (p.orient === 6 || p.orient === 8) img.classList.add('r90'); }
+  el.prepend(img);
+}
+// Una miniatura puede estar compartida (foto y sus duplicados): solo se libera cuando ya nadie la usa.
+function releaseThumb(url) {
+  if (url && !state.photos.some((x) => x.thumbUrl === url)) URL.revokeObjectURL(url);
 }
 
 async function makeThumb(p) {
-  if (!p || p.thumbUrl) return;
+  if (!p || p.thumbUrl || p.thumbBusy) return;
+  p.thumbBusy = true;
+  try { await makeThumbNow(p); } finally { p.thumbBusy = false; }
+}
+async function makeThumbNow(p) {
   const { orientation, thumb } = await readExif(p.file);
   p.orient = orientation;
   let url = null, rotate = '';
@@ -368,14 +385,11 @@ async function makeThumb(p) {
       url = URL.createObjectURL(await c.convertToBlob({ type: 'image/jpeg', quality: 0.7 }));
     } catch { return; }
   }
-  p.thumbUrl = url;
-  const el = document.querySelector(`.th[data-i="${p.i}"]`);
-  if (el) {
-    const img = document.createElement('img');
-    img.src = url; img.alt = ''; img.loading = 'lazy';
-    if (rotate) { img.style.transform = rotate; if (orientation === 6 || orientation === 8) img.classList.add('r90'); }
-    el.prepend(img);
-  }
+  if (!state.photos.includes(p)) { URL.revokeObjectURL(url); return; } // la quitaron mientras se generaba
+  p.thumbUrl = url; p.thumbRot = rotate;
+  // los duplicados de esta misma foto usan la misma miniatura
+  for (const x of state.photos) if (x !== p && x.file === p.file && !x.thumbUrl) { x.thumbUrl = url; x.thumbRot = rotate; x.orient = orientation; attachThumb(document.querySelector(`.th[data-i="${x.i}"]`), x); }
+  attachThumb(document.querySelector(`.th[data-i="${p.i}"]`), p);
 }
 
 function refreshStrip() {
@@ -1141,6 +1155,7 @@ async function runExport() {
   const exp = new Engine(canvas, { preserve: true });
   const t0 = performance.now();
   let zip = [], zipN = 0, done = 0, failed = [];
+  const usedNames = new Set(); // nombres ya usados en esta exportación (duplicados no se pisan)
   const flushZip = async () => {
     if (!zip.length) return;
     const { zipSync } = await import('./vendor/fflate.js');
@@ -1225,17 +1240,18 @@ $('btn-zoom-out').addEventListener('click', () => { state.zoom = Math.max(.25, +
 $('btn-zoom-fit').addEventListener('click', () => { state.zoom = 1; state.panX = 0; state.panY = 0; draw(); });
 $('btn-duplicate').addEventListener('click', () => {
   const p = cur(); if (!p) return;
-  const copy = { ...p, i: state.photos.length, name: p.name.replace(/(\.[^.]+)$/, '-copia$1'), key: `${p.key}|copy|${Date.now()}`, dup: true, s: structuredClone(p.s), hist: [], thumbUrl: null };
+  const copy = { ...p, i: state.photos.length, name: p.name.replace(/(\.[^.]+)$/, '-copia$1'), key: `${p.key}|copy|${Date.now()}`, dup: true, s: structuredClone(p.s), hist: [], thumbBusy: false };
   state.photos.push(copy); save(copy, false); state.sel = new Set([copy.i]); state.anchor = copy.i; buildStrip(); selectPhoto(copy.i); saveSession(); toast('Foto duplicada en la sesión');
 });
 $('btn-remove-photo').addEventListener('click', () => {
   const p = cur();
   if (!p) return;
   if (state.photos.length <= 1) return toast('No se puede quitar la última foto de la sesión');
-  if (p.thumbUrl) URL.revokeObjectURL(p.thumbUrl);
   const preview = state.previews.get(p.key);
-  preview?.close?.(); state.previews.delete(p.key);
+  state.previews.delete(p.key);
   state.photos.splice(state.cur, 1);
+  releaseThumb(p.thumbUrl); // solo si ninguna otra foto (un duplicado) la sigue usando
+  if (preview) setTimeout(() => { if (preview !== previewBitmap) preview.close?.(); }, 1500);
   // que no vuelva a aparecer al reabrir la sesión (salvo que quede otra copia de la misma foto)
   if (!p.dup && !state.photos.some((x) => !x.dup && x.srcName === p.srcName)) (state.removed ||= []).push(p.srcName);
   state.photos.forEach((photo, i) => { photo.i = i; });
