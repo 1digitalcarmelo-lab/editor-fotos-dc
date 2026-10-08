@@ -1194,6 +1194,7 @@ function copySettings() {
 function applyToSelection(src) {
   const withGeo = $('chk-sync-crop').checked;
   const keys = withGeo ? [...TONE_KEYS, 'preset', ...GEO_KEYS] : [...TONE_KEYS, 'preset'];
+  if ($('chk-sync-masks').checked) keys.push('masks'); // cada foto recibe su propia copia de las máscaras
   let n = 0;
   for (const i of state.sel) {
     const p = state.photos[i];
