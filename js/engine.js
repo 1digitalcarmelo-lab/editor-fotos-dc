@@ -26,7 +26,8 @@ in vec2 vUv; out vec4 o;
 uniform sampler2D uSrc, uBlur;
 uniform mat3 uM;
 uniform vec2 uTexel;
-uniform float uExp,uCon,uHi,uSh,uWh,uBl,uTemp,uTint,uVib,uSat,uCla,uVig,uSharp,uBW,uAspect,uDehaze,uNoise,uDistortion,uFisheye;
+uniform float uExp,uCon,uHi,uSh,uWh,uBl,uTemp,uTint,uVib,uSat,uCla,uVig,uSharp,uBW,uAspect,uDehaze,uNoise,uDistortion,uFisheye,uFade;
+uniform vec4 uSplit; // virado: tono y cantidad en sombras (x,y) y en luces (z,w)
 uniform vec4 uMaskGeom[8], uMaskTone[8], uMaskColor[8], uMaskDetail[8], uMaskMeta[8];
 uniform vec4 uRedEye[16];
 float s2l(float c){ return c<=0.04045 ? c/12.92 : pow((c+0.055)/1.055, 2.4); }
@@ -94,6 +95,16 @@ void main(){
   float vf = 1. + uVib*(1.-sat)*(1.-skin);
   q = vec3(g) + (q-vec3(g)) * max(vf*(1.+uSat), 0.);
   if (uBW > 0.5) { float bw = dot(q, vec3(0.30,0.59,0.11)); q = vec3(bw); }
+  // Virado (split toning): tiñe sombras y luces con un color suave cada una. Funciona también en blanco y negro (sepia).
+  if (uSplit.y > 0. || uSplit.w > 0.) {
+    float lu = clamp(luma(q), 0., 1.);
+    vec3 cs = clamp(abs(mod(uSplit.x*6. + vec3(0.,4.,2.), 6.) - 3.) - 1., 0., 1.);
+    vec3 ch = clamp(abs(mod(uSplit.z*6. + vec3(0.,4.,2.), 6.) - 3.) - 1., 0., 1.);
+    cs -= vec3(luma(cs)); ch -= vec3(luma(ch));
+    q += cs * uSplit.y * .55 * (1.-lu)*(1.-lu) + ch * uSplit.w * .45 * lu*lu;
+  }
+  // Mate: levanta los negros como una copia de laboratorio lavada (las luces casi no cambian)
+  q += uFade * .14 * (1.-q)*(1.-q);
   for (int i = 0; i < 8; i++) {
     vec4 g = uMaskGeom[i];
     if (g.z <= 0.0) continue;
@@ -140,6 +151,7 @@ export const DEFAULTS = Object.freeze({
   temp: 0, tint: 0, vib: 0, sat: 0,
   cla: 0, sharp: 0, vig: 0, bw: false,
   dehaze: 0, noise: 0, distortion: 0, fisheye: 0, redEyes: [],
+  fade: 0, shH: 0, shS: 0, hiH: 0, hiS: 0,
   rot: 0, ang: 0, crop: { x: 0, y: 0, w: 1, h: 1 }, aspect: 'libre', masks: [],
   pan: { x: 0, y: 0 }, fill: 0,
   preset: null, // { id, name, sig }: qué preset se aplicó y cómo quedaron los ajustes en ese momento
@@ -352,6 +364,8 @@ export class Engine {
     gl.uniform1f(u.uVib, f('vib')); gl.uniform1f(u.uSat, f('sat'));
     gl.uniform1f(u.uCla, f('cla')); gl.uniform1f(u.uSharp, f('sharp')); gl.uniform1f(u.uVig, f('vig'));
     gl.uniform1f(u.uBW, z.bw ? 1 : 0);
+    gl.uniform1f(u.uFade, f('fade'));
+    gl.uniform4f(u.uSplit, (z.shH || 0) / 360, (z.shS || 0) / 100, (z.hiH || 0) / 360, (z.hiS || 0) / 100);
     gl.uniform1f(u.uAspect, outW / outH);
     gl.uniform1f(u.uDehaze, (z.dehaze || 0) / 100);
     gl.uniform1f(u.uNoise, (z.noise || 0) / 100);

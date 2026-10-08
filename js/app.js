@@ -6,7 +6,7 @@ import * as store from './store.js';
 const $ = (id) => document.getElementById(id);
 const PREVIEW_MAX = 2560;
 const EXTS = /\.(jpe?g|png|webp)$/i;
-const TONE_KEYS = ['exp', 'con', 'hi', 'sh', 'wh', 'bl', 'temp', 'tint', 'vib', 'sat', 'cla', 'sharp', 'vig', 'dehaze', 'noise', 'distortion', 'fisheye', 'bw'];
+const TONE_KEYS = ['exp', 'con', 'hi', 'sh', 'wh', 'bl', 'temp', 'tint', 'vib', 'sat', 'cla', 'sharp', 'vig', 'dehaze', 'noise', 'distortion', 'fisheye', 'bw', 'fade', 'shH', 'shS', 'hiH', 'hiS'];
 const GEO_KEYS = ['rot', 'ang', 'crop', 'aspect', 'aspectV', 'pan', 'fill'];
 
 const SLIDERS = {
@@ -33,6 +33,13 @@ const SLIDERS = {
     { k: 'dehaze', label: 'Dehaze / niebla' },
     { k: 'noise', label: 'Reducción de ruido', min: 0, max: 100 },
   ],
+  'sl-fx': [
+    { k: 'fade', label: 'Mate (negros lavados)', min: 0, max: 100 },
+    { k: 'shH', label: 'Tono en sombras', min: 0, max: 360, track: 'linear-gradient(90deg,#e05050,#e0a040,#d8d040,#50c060,#40c0c0,#5070e0,#b050d0,#e05050)', fmt: (v) => Math.round(v) + '°' },
+    { k: 'shS', label: 'Cantidad en sombras', min: 0, max: 100 },
+    { k: 'hiH', label: 'Tono en luces', min: 0, max: 360, track: 'linear-gradient(90deg,#e05050,#e0a040,#d8d040,#50c060,#40c0c0,#5070e0,#b050d0,#e05050)', fmt: (v) => Math.round(v) + '°' },
+    { k: 'hiS', label: 'Cantidad en luces', min: 0, max: 100 },
+  ],
   'sl-optics': [
     { k: 'distortion', label: 'Barril / cojín', min: -100, max: 100 },
     { k: 'fisheye', label: 'Fisheye', min: -100, max: 100 },
@@ -43,12 +50,57 @@ const SLIDERS = {
   ],
 };
 
+// Biblioteca propia de Revelado DC: looks originales armados solo con los controles del editor
+// (no son copias de presets comerciales). Cada uno sigue siendo editable después de aplicarlo.
+const P = (cat, id, name, s) => ({ cat, id: 'dc:' + id, name, s });
 const BUILTIN_PRESETS = [
-  { id: 'dc:natural', name: 'Natural', s: { con: 6, hi: -12, sh: 10, cla: 5, vib: 8, sharp: 10 } },
-  { id: 'dc:calido-evento', name: 'Cálido evento', s: { temp: 10, con: 8, hi: -15, sh: 14, cla: 4, vib: 12, vig: -8, sharp: 10 } },
-  { id: 'dc:luminoso', name: 'Luminoso', s: { exp: 0.2, con: 4, hi: -18, sh: 20, wh: 6, vib: 8, sharp: 8 } },
-  { id: 'dc:salon-oscuro', name: 'Salón oscuro', s: { exp: 0.35, con: 6, hi: -20, sh: 28, bl: -5, cla: 7, vib: 8, temp: -3, sharp: 10 } },
-  { id: 'dc:bn', name: 'Blanco y negro', s: { bw: true, con: 25, hi: -20, sh: 10, cla: 15, sharp: 15 } },
+  P('Natural', 'natural-limpio', 'Natural limpio', { con: 6, hi: -8, sh: 6, wh: 4, vib: 8, cla: 4, sharp: 10 }),
+  P('Natural', 'natural-calido', 'Natural cálido', { temp: 8, tint: 2, con: 6, hi: -6, sh: 6, vib: 10, sharp: 8 }),
+  P('Natural', 'natural-frio', 'Natural frío', { temp: -7, con: 6, hi: -6, sh: 4, vib: 6, sharp: 8 }),
+  P('Natural', 'natural-luminoso', 'Natural luminoso', { exp: 0.2, con: 2, hi: -12, sh: 12, wh: 8, bl: 4, vib: 8, sharp: 8 }),
+  P('Natural', 'natural-contraste-suave', 'Natural contraste suave', { con: -10, hi: -6, sh: 8, bl: 6, vib: 6, cla: -4, sharp: 6 }),
+  P('Natural', 'natural-mate', 'Natural mate', { con: -6, bl: 4, fade: 35, vib: 4, sat: -6, sharp: 6 }),
+
+  P('Eventos', 'boda-calida', 'Boda cálida', { exp: 0.1, temp: 9, tint: 3, con: 4, hi: -12, sh: 10, wh: 6, vib: 6, sat: -4, cla: -4, fade: 10, hiH: 40, hiS: 10, sharp: 8 }),
+  P('Eventos', 'boda-elegante', 'Boda elegante', { con: 10, hi: -10, sh: 4, bl: -6, vib: -4, sat: -12, cla: 4, shH: 210, shS: 8, vig: -10, sharp: 10 }),
+  P('Eventos', 'boda-luminosa', 'Boda luminosa', { exp: 0.3, con: -4, hi: -16, sh: 16, wh: 10, bl: 6, vib: 4, sat: -6, cla: -6, fade: 12, sharp: 6 }),
+  P('Eventos', 'xv-luminoso', 'XV luminoso', { exp: 0.25, temp: 4, tint: 4, con: 2, hi: -12, sh: 14, wh: 10, vib: 12, cla: -4, sharp: 8 }),
+  P('Eventos', 'xv-color', 'XV color', { con: 12, hi: -8, sh: 6, tint: 4, vib: 28, sat: 8, cla: 6, vig: -8, sharp: 10 }),
+  P('Eventos', 'salon-oscuro', 'Salón oscuro', { exp: 0.35, temp: -3, con: 6, hi: -18, sh: 24, bl: -4, vib: 8, cla: 6, noise: 20, sharp: 8 }),
+  P('Eventos', 'flash-evento', 'Flash evento', { exp: -0.1, temp: 6, con: 8, hi: -24, sh: 6, wh: -6, bl: -4, vib: 6, sat: -6, vig: -14, sharp: 6 }),
+  P('Eventos', 'iglesia', 'Iglesia / Civil', { exp: 0.2, temp: -6, con: 6, hi: -14, sh: 16, vib: 6, sat: -6, cla: 4, noise: 15, sharp: 8 }),
+  P('Eventos', 'exterior', 'Exterior de día', { con: 8, hi: -20, sh: 10, wh: 4, bl: -4, vib: 14, dehaze: 8, cla: 6, sharp: 12 }),
+  P('Eventos', 'fiesta', 'Fiesta', { exp: 0.15, con: 14, hi: -10, sh: 10, bl: -8, vib: 22, sat: 6, cla: 8, vig: -10, noise: 15, sharp: 8 }),
+
+  P('Color', 'vivo', 'Vivo', { con: 14, hi: -6, sh: 4, bl: -6, vib: 30, sat: 10, cla: 8, sharp: 12 }),
+  P('Color', 'color-suave', 'Color suave', { con: -10, hi: -8, sh: 8, vib: -4, sat: -14, fade: 14, sharp: 6 }),
+  P('Color', 'golden', 'Golden', { temp: 16, tint: 4, con: 8, hi: -8, sh: 6, vib: 12, shH: 25, shS: 8, hiH: 42, hiS: 18, sharp: 8 }),
+  P('Color', 'pastel', 'Pastel', { exp: 0.2, con: -16, hi: -10, sh: 14, bl: 10, vib: 6, sat: -10, fade: 28, shH: 190, shS: 8, hiH: 330, hiS: 8, sharp: 4 }),
+  P('Color', 'color-pop', 'Color pop', { con: 22, bl: -10, vib: 36, sat: 16, cla: 12, dehaze: 6, vig: -8, sharp: 14 }),
+  P('Color', 'magenta-suave', 'Magenta suave', { tint: 10, con: 4, sh: 6, vib: 6, sat: -4, shH: 300, shS: 6, hiH: 320, hiS: 12, fade: 8 }),
+
+  P('Cine', 'cine-calido', 'Cine cálido', { temp: 10, con: 10, hi: -14, sh: 6, bl: -6, vib: -6, sat: -10, shH: 30, shS: 10, hiH: 45, hiS: 12, fade: 10, vig: -12 }),
+  P('Cine', 'cine-frio', 'Cine frío', { temp: -12, tint: -2, con: 12, hi: -12, bl: -6, sat: -14, shH: 210, shS: 14, hiH: 200, hiS: 6, fade: 8, vig: -12 }),
+  P('Cine', 'teal-orange', 'Teal & Orange suave', { con: 10, hi: -10, sh: 6, vib: 8, sat: -4, shH: 195, shS: 22, hiH: 32, hiS: 18, vig: -8 }),
+  P('Cine', 'moody', 'Moody', { exp: -0.2, con: 16, hi: -24, sh: -6, bl: -12, vib: -10, sat: -20, cla: 10, shH: 220, shS: 12, fade: 12, vig: -22 }),
+  P('Cine', 'dramatico', 'Dramático', { con: 30, hi: -30, sh: 14, wh: 6, bl: -14, sat: -16, cla: 28, dehaze: 10, vig: -24, sharp: 14 }),
+  P('Cine', 'cine-nocturno', 'Cine nocturno', { exp: -0.25, temp: -16, tint: 3, con: 14, hi: -10, bl: -10, sat: -18, shH: 225, shS: 20, hiH: 190, hiS: 8, vig: -20, noise: 20 }),
+
+  P('Vintage', 'retro', 'Retro', { temp: 10, con: -6, bl: 6, sat: -18, fade: 26, shH: 45, shS: 14, hiH: 55, hiS: 10, vig: -12 }),
+  P('Vintage', 'sepia', 'Sepia', { bw: true, con: 8, fade: 14, shH: 30, shS: 34, hiH: 42, hiS: 26, vig: -14 }),
+  P('Vintage', 'polaroid', 'Instantánea suave', { exp: 0.1, temp: 6, tint: -4, con: -10, bl: 8, sat: -10, fade: 30, shH: 180, shS: 10, hiH: 50, hiS: 14, vig: -10 }),
+  P('Vintage', 'film-calido', 'Film cálido años 70', { temp: 18, tint: 6, con: 4, sat: -6, fade: 22, shH: 20, shS: 16, hiH: 48, hiS: 22, vig: -14 }),
+  P('Vintage', 'film-verde', 'Film verde', { temp: -4, tint: -10, con: 6, sat: -14, fade: 20, shH: 150, shS: 16, hiH: 60, hiS: 10, vig: -10 }),
+
+  P('Blanco y negro', 'bn-suave', 'B&N suave', { bw: true, con: -8, hi: -10, sh: 12, fade: 10, cla: -4, sharp: 6 }),
+  P('Blanco y negro', 'bn-clasico', 'B&N clásico', { bw: true, con: 18, hi: -14, sh: 8, bl: -6, cla: 10, sharp: 12 }),
+  P('Blanco y negro', 'bn-contraste', 'B&N contraste', { bw: true, con: 40, hi: -20, wh: 12, bl: -16, cla: 18, sharp: 14 }),
+  P('Blanco y negro', 'bn-mate', 'B&N mate', { bw: true, con: 6, fade: 36, cla: 6, vig: -10 }),
+  P('Blanco y negro', 'bn-dramatico', 'B&N dramático', { bw: true, con: 34, hi: -36, sh: 10, bl: -18, cla: 32, dehaze: 12, vig: -28, sharp: 14 }),
+
+  P('Retrato', 'piel-natural', 'Piel natural', { temp: 4, tint: 2, con: 2, hi: -10, sh: 8, vib: 6, sat: -6, cla: -12, sharp: 4 }),
+  P('Retrato', 'retrato-luminoso', 'Retrato luminoso', { exp: 0.25, temp: 5, con: -2, hi: -14, sh: 14, wh: 8, vib: 6, sat: -4, cla: -10, fade: 8 }),
+  P('Retrato', 'retrato-suave', 'Retrato suave', { temp: 6, con: -10, hi: -8, sh: 10, bl: 4, sat: -8, cla: -22, fade: 12, hiH: 30, hiS: 8 }),
 ];
 
 const state = {
