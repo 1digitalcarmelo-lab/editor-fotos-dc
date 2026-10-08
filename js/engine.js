@@ -106,9 +106,11 @@ void main(){
     vec2 lp = vec2(cs*pd.x + sn*pd.y, -sn*pd.x + cs*pd.y);
     float m;
     if (linear > .5) {
-      vec2 md = mat2(cs, -sn, sn, cs) * (vUv - g.xy);
-      float edge = max(.008, clamp(uMaskDetail[i].z, .005, .49) * .5);
-      m = 1. - smoothstep(.5 - edge, .5 + edge, abs(md.x / max(g.z, .001)));
+      // Lineal: degradado a lo largo de la normal de la línea central. g.z = ancho total de la transición
+      // (en altos de cuadro). Efecto pleno del lado "de arriba" de la línea, nada del otro lado.
+      float d = dot(pd, vec2(sn, -cs));
+      float hw = max(g.z * .5, .0015);
+      m = smoothstep(-hw, hw, d);
     } else {
       // Radial: g.z = radio horizontal (fracción del ancho), g.w = radio vertical (fracción del alto).
       // Efecto pleno adentro, se desvanece hacia el borde de la elipse según la suavidad.
@@ -319,7 +321,7 @@ export class Engine {
     const masks = Array.isArray(z.masks) ? z.masks.slice(0, 8) : [];
     for (let i = 0; i < 8; i++) {
       const m = masks[i] || {}, t = m.tone || {};
-      const g = m.kind === 'linear' ? [m.x ?? .5, m.y ?? .5, m.w ?? .75, m.rotation ?? 0] : [m.x ?? .5, m.y ?? .5, m.w ?? .25, m.h ?? .25];
+      const g = m.kind === 'linear' ? [m.x ?? .5, m.y ?? .5, m.w ?? .3, m.rotation ?? 0] : [m.x ?? .5, m.y ?? .5, m.w ?? .25, m.h ?? .25];
       gl.uniform4f(u.uMaskGeom[i], ...g);
       gl.uniform4f(u.uMaskMeta[i], m.rotation ?? 0, 0, 0, 0);
       gl.uniform4f(u.uMaskTone[i], t.exp || 0, (t.con || 0)/100, (t.hi || 0)/100, (t.sh || 0)/100);

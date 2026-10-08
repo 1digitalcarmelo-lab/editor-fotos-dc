@@ -488,6 +488,23 @@ function renderMasks() {
     const feather = document.createElement('div'); feather.className = 'sl'; feather.innerHTML = `<div class="sl-head"><label>Suavidad del borde</label><output>${fv}%</output></div><input type="range" min="2" max="100" value="${fv}">`;
     feather.querySelector('input').oninput = (e) => { m.feather = +e.target.value / 100; feather.querySelector('output').textContent = `${e.target.value}%`; draw(); save(cur()); };
     host.appendChild(feather);
+  } else {
+    const geo = (label, val, min, max, fmt, apply) => {
+      const wrap = document.createElement('div'); wrap.className = 'sl';
+      wrap.innerHTML = `<div class="sl-head"><label>${label}</label><output>${fmt(val)}</output></div><input type="range" min="${min}" max="${max}" step="1" value="${val}">`;
+      const input = wrap.querySelector('input'), out = wrap.querySelector('output');
+      input.oninput = () => { apply(+input.value); out.textContent = fmt(+input.value); draw(); save(cur()); };
+      host.appendChild(wrap);
+    };
+    geo('Ángulo de la línea', Math.round((m.rotation || 0) * 180 / Math.PI), -180, 180, (v) => `${v}°`, (v) => { m.rotation = v * Math.PI / 180; });
+    geo('Ancho de la transición', Math.round((m.w ?? .3) * 100), 1, 200, (v) => `${v}%`, (v) => { m.w = v / 100; });
+    const quick = document.createElement('div'); quick.className = 'row gap wrap';
+    for (const [t, deg] of [['Horizontal', 0], ['Vertical', 90], ['Diagonal', 45]]) {
+      const bt = document.createElement('button'); bt.className = 'btn small ghost'; bt.textContent = t;
+      bt.onclick = () => { const p = cur(); p.hist.push(structuredClone(p.s)); m.rotation = deg * Math.PI / 180; draw(); save(p); renderMasks(); };
+      quick.appendChild(bt);
+    }
+    host.appendChild(quick);
   }
   const tip = document.createElement('p'); tip.className = 'muted'; tip.textContent = m.kind === 'linear'
     ? 'En la foto: arrastrá la línea del medio para moverla, las líneas de afuera para la transición y el punto redondo para girarla.'
@@ -546,10 +563,38 @@ function drawRadialMask(host, svg, m, i, sel, f) {
   }
   const [x, y] = at(0, s.ry + 28); maskHandle(host, x, y, 'rot', 'Girar (con Shift, de a 15°)', 'rotate', i);
 }
+// Lineal: m.x, m.y = un punto de la línea central, m.rotation = ángulo de la línea (0 = horizontal),
+// m.w = ancho total de la transición (fracción del alto del cuadro). El efecto va del lado "de arriba".
+let maskClipId = 0;
 function drawLinearMask(host, svg, m, i, sel, f) {
-  // (se reemplaza en el commit de la máscara lineal)
-  const s = maskScreen(m, f);
-  maskHandle(host, s.cx, s.cy, `pin ${sel ? 'on' : ''}`, 'Arrastrá para mover la máscara', 'move', i, 'move');
+  const s = maskScreen(m, f), hw = Math.max(1, (m.w ?? .3) * f.h / 2), L = 2 * (f.w + f.h);
+  const at = (a, b) => [s.cx + s.ux[0] * a + s.uy[0] * b, s.cy + s.ux[1] * a + s.uy[1] * b];
+  const cid = `mclip${++maskClipId}`;
+  const defs = svgEl('defs', {}, svg), cp = svgEl('clipPath', { id: cid }, defs);
+  svgEl('rect', { x: f.left, y: f.top, width: f.w, height: f.h }, cp);
+  const g = svgEl('g', { 'clip-path': `url(#${cid})`, class: `mask-g ${sel ? 'sel' : ''}` }, svg);
+  const line = (b, cls, drag, cursor) => {
+    const [x1, y1] = at(-L, b), [x2, y2] = at(L, b);
+    const el = svgEl('line', { x1, y1, x2, y2, class: cls }, g);
+    if (drag) { el.dataset.drag = drag; el.dataset.i = i; if (cursor) el.style.cursor = cursor; }
+    return el;
+  };
+  if (sel) {
+    // zona afectada (del lado del efecto, o del otro si está invertida)
+    const side = m.invert ? -1 : 1, p1 = at(-L, 0), p2 = at(L, 0), p3 = at(L, side * L), p4 = at(-L, side * L);
+    svgEl('polygon', { points: [p1, p2, p3, p4].map((q) => q.join(',')).join(' '), class: 'mask-side' }, g);
+    const curN = resizeCursor(s.th + Math.PI / 2);
+    line(hw, 'mask-edge soft', null); line(-hw, 'mask-edge soft', null);
+    line(0, 'mask-edge', null);
+    line(hw, 'mask-hit', 'band', curN); line(-hw, 'mask-hit', 'band', curN);
+    line(0, 'mask-hit', 'move', 'move');
+  } else line(0, 'mask-edge dim', null);
+  maskHandle(host, s.cx, s.cy, `pin ${sel ? 'on' : ''}`, sel ? 'Arrastrá para mover la máscara' : 'Seleccionar máscara', 'move', i, 'move');
+  if (!sel) return;
+  const curN = resizeCursor(s.th + Math.PI / 2);
+  for (const b of [hw, -hw]) { const [x, y] = at(0, b); maskHandle(host, x, y, 'size band', 'Ancho de la transición (arrastrá)', 'band', i, curN).style.transform = `rotate(${s.th}rad)`; }
+  const R = clampN(Math.min(f.w, f.h) * .32, 60, 260);
+  for (const a of [R, -R]) { const [x, y] = at(a, 0); maskHandle(host, x, y, 'rot', 'Girar (con Shift, de a 15°)', 'rotate', i); }
 }
 function renderMaskOverlay() {
   const host = $('mask-overlay'); if (!host) return;
@@ -592,6 +637,10 @@ window.addEventListener('pointermove', (e) => {
     const r = clampN(r0 + l - l0, 6, 3 * Math.max(f.w, f.h));
     if (d.type === 'rx') m.w = r / f.w; else m.h = r / f.h;
     if (m.lockCircle) { if (d.type === 'rx') m.h = r / f.h; else m.w = r / f.w; }
+  } else if (d.type === 'band') {
+    // arrastrar una línea de afuera cambia el ancho de la transición (simétrico respecto de la línea central)
+    const hw0 = (o.w ?? .3) * f.h / 2, hw = clampN(hw0 + Math.abs(ly) - Math.abs(d.ly), 2, 2 * f.h);
+    m.w = 2 * hw / f.h;
   } else if (d.type === 'rotate') {
     let a = (o.rotation || 0) + Math.atan2(vy, vx) - d.a0;
     if (e.shiftKey) a = Math.round(a / (Math.PI / 12)) * (Math.PI / 12);
@@ -605,7 +654,7 @@ function endMaskDrag(e) {
   try { $('viewport').releasePointerCapture(d.id); } catch { /* ya liberado */ }
   const p = cur();
   if (p && d.moved) { p.hist.push(d.before); if (p.hist.length > 60) p.hist.shift(); state.redo = []; save(p); refreshStrip(); }
-  renderMaskOverlay();
+  renderMasks(); // actualiza también ángulo / ancho en el panel
 }
 window.addEventListener('pointerup', endMaskDrag);
 window.addEventListener('pointercancel', endMaskDrag);
