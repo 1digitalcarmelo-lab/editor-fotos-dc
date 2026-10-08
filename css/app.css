@@ -85,6 +85,7 @@ button:disabled { opacity: .45; cursor: default; }
 .row.gap { gap: 8px; }
 .row.wrap { flex-wrap: wrap; }
 .lbl { display: block; font-size: 12px; color: var(--soft); margin-bottom: 6px; }
+select.mini-select { flex: 0 0 auto; width: auto; padding: 5px 8px; border-radius: 999px; font-size: 12px; }
 select { flex: 1; min-width: 0; background: #0f0e20; color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 7px 8px; font: inherit; font-size: 13px; }
 .check { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 13px; color: var(--soft); cursor: pointer; }
 .check input { accent-color: var(--gold); }

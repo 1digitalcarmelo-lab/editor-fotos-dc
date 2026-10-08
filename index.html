@@ -77,8 +77,11 @@
   <aside class="panel" id="panel" hidden>
     <div class="block">
       <canvas id="histo" width="300" height="90"></canvas>
-      <div class="row gap">
+      <div class="row gap wrap">
         <button class="btn small" id="btn-auto" title="Ajuste automático de luces">✨ Auto</button>
+        <select id="auto-mode" class="mini-select" title="Estilo del Auto">
+          <option value="natural">Natural</option><option value="vivo">Vivo</option><option value="suave">Suave</option>
+        </select>
         <button class="btn small ghost" id="btn-reset" title="Volver a la foto original">Restablecer</button>
         <button class="btn small ghost" id="btn-undo" title="Deshacer (Ctrl+Z)">↶</button>
         <button class="btn small ghost" id="btn-redo" title="Rehacer (Ctrl+Shift+Z)">↷</button>

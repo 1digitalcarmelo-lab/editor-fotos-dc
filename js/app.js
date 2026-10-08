@@ -555,10 +555,13 @@ function buildSliders() {
         draw();
       });
       input.addEventListener('change', commit);
-      wrap.querySelector('label').addEventListener('dblclick', () => {
-        const p = cur(); if (!p) return;
+      // Doble clic en el deslizador o en su nombre: vuelve a neutro al instante
+      const reset = (ev) => {
+        ev.preventDefault(); const p = cur(); if (!p) return;
         beginChange(); p.s[d.k] = 0; syncSliders(); draw(); commit();
-      });
+      };
+      wrap.querySelector('.sl-head').addEventListener('dblclick', reset);
+      input.addEventListener('dblclick', reset);
       sliderEls[d.k] = { input, out, wrap, fmt };
       host.appendChild(wrap);
     }
@@ -600,7 +603,11 @@ function renderMasks() {
   const add = (key, label, min, max, step) => {
     const wrap = document.createElement('div'); wrap.className = 'sl'; const v = m.tone[key] || 0;
     wrap.innerHTML = `<div class="sl-head"><label>${label}</label><output>${v > 0 ? '+' : ''}${v}</output></div><input type="range" min="${min}" max="${max}" step="${step}" value="${v}">`;
-    const input = wrap.querySelector('input'), out = wrap.querySelector('output'); input.oninput = () => { m.tone[key] = +input.value; out.textContent = (+input.value > 0 ? '+' : '') + input.value; draw(); save(cur()); };
+    const input = wrap.querySelector('input'), out = wrap.querySelector('output'); input.oninput = () => { m.tone[key] = +input.value; out.textContent = (+input.value > 0 ? '+' : '') + input.value; wrap.classList.toggle('changed', +input.value !== 0); draw(); save(cur()); };
+    wrap.classList.toggle('changed', v !== 0);
+    const reset = (ev) => { ev.preventDefault(); m.tone[key] = 0; input.value = 0; out.textContent = '0'; wrap.classList.remove('changed'); draw(); save(cur()); };
+    wrap.querySelector('.sl-head').addEventListener('dblclick', reset); input.addEventListener('dblclick', reset);
+    wrap.querySelector('label').title = 'Doble clic para volver a 0';
     host.appendChild(wrap);
   };
   MASK_KEYS.forEach((x) => add(...x));
@@ -835,7 +842,7 @@ function redo() {
 
 // ---------------------------------------------------------------- auto
 // Analiza una foto (en chiquito) y propone luz y balance de blancos.
-function analyze(img) {
+function analyze(img, mode = 'natural') {
   const k = Math.min(1, 256 / Math.max(img.width, img.height));
   const w = Math.max(1, Math.round(img.width*k)), h = Math.max(1, Math.round(img.height*k));
   const c = new OffscreenCanvas(w, h), ctx = c.getContext('2d', { willReadFrequently: true });
@@ -844,50 +851,82 @@ function analyze(img) {
   const lin = (v) => v <= 0.04045 ? v/12.92 : Math.pow((v + 0.055)/1.055, 2.4);
   const srgb = (v) => v <= 0.0031308 ? v*12.92 : 1.055*Math.pow(v, 1/2.4) - 0.055;
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-  const L = new Float32Array(w*h);
+  const L = new Float32Array(w*h), M = new Float32Array(w*h);
   let sr = 0, sg = 0, sb = 0, nn = 0;
   for (let i = 0, j = 0; i < px.length; i += 4, j++) {
     const r = px[i]/255, g = px[i+1]/255, b = px[i+2]/255;
     const l = 0.2126*r + 0.7152*g + 0.0722*b;
     L[j] = l;
     const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+    M[j] = mx;
     // Zonas casi neutras (paredes, ropa clara, manteles): sirven para medir el tinte de la luz
     if (l > 0.15 && l < 0.88 && (mx - mn) / mx < 0.35) { sr += lin(r); sg += lin(g); sb += lin(b); nn++; }
   }
   L.sort();
   const q = (f) => L[Math.min(L.length - 1, Math.floor(f*L.length))];
-  // Fotos claras (bodas de día, fondos blancos) se oscurecen poco: solo se corrige la mitad
-  let ev = Math.log2(lin(0.46) / Math.max(lin(q(0.5)), 1e-4)) * 0.85;
-  ev = ev < 0 ? Math.max(ev * 0.5, -0.7) : Math.min(ev, 1.5);
+  // Auto fotográfico y conservador: lleva la luz media a un punto agradable, estira blancos y negros
+  // solo si hace falta, y casi no toca altas luces ni sombras (nada de efecto HDR ni blancos grises).
+  const med = q(0.5);
+  let ev = Math.log2(lin(0.45) / Math.max(lin(med), 1e-4)) * 0.75;
+  // fotos claras (bodas de día, fondos blancos) casi no se oscurecen: si ya tienen blancos de verdad,
+  // bajarlas solo deja los blancos grises. Las oscuras suben, con tope.
+  const hasWhites = q(0.995) > 0.93;
+  ev = ev < 0 ? Math.max(ev * 0.45, hasWhites ? -0.1 : -0.4) : Math.min(ev, 1.3);
+  // no subir tanto que se quemen las luces de colores o las caras: se frena si aparece mucho quemado nuevo
+  M.sort();
+  const clipAt = (e) => { const t = srgbToLinClip(e); let lo = 0, hi = M.length; while (lo < hi) { const m = (lo + hi) >> 1; if (M[m] < t) lo = m + 1; else hi = m; } return (M.length - lo) / M.length; };
+  function srgbToLinClip(e) { return srgb(Math.min(1, lin(0.985) / Math.pow(2, e))); }
+  const clip0 = clipAt(0);
+  while (ev > 0.05 && clipAt(ev) > Math.max(0.035, clip0 * 2.2)) ev -= 0.05;
   const after = (v) => Math.min(1.2, srgb(lin(v) * Math.pow(2, ev)));
-  const p99 = after(q(0.995)), p1 = after(q(0.005)), p25 = after(q(0.25));
-  const w0 = clamp(p99 / 0.97, 0.85, 1.12);
-  const b0 = (p1 - 0.02*w0) / 0.98;
-  let bright = 0; for (let i = Math.floor(L.length*0.9); i < L.length; i++) if (after(L[i]) > 0.92) bright++;
-  // Balance de blancos: corrige la mitad del tinte, así no se pierde la calidez de un salón
+  const p995 = after(q(0.995)), p005 = after(q(0.005)), p25 = after(q(0.25)), p75 = after(q(0.75));
+  let clipped = 0; for (let i = Math.floor(L.length*0.85); i < L.length; i++) if (after(L[i]) > 0.97) clipped++;
+  clipped /= L.length;
+  // Blancos: si el punto más claro no llega a blanco, se sube (blancos vivos). Solo se baja si hay mucho quemado.
+  let wh = 0;
+  if (p995 < 0.93) wh = clamp((0.96 - p995) / 0.15 * 100 * 0.8, 0, 30);
+  else if (ev < 0 && hasWhites) wh = 8; // al bajar un poco la luz, los blancos se mantienen blancos
+  else if (clipped > 0.06) wh = -clamp((clipped - 0.06) * 150, 0, 10);
+  // Negros: profundizar negros lavados; aflojar un poco solo si están muy empastados
+  let bl = 0;
+  if (p005 > 0.06) bl = -clamp((p005 - 0.03) / 0.10 * 100 * 0.6, 0, 25);
+  else if (p005 < 0.005 && q(0.03) < 0.02) bl = 6;
+  // Altas luces: solo si hay una zona grande muy clara (cielo, vestido blanco quemado)
+  const hi = clipped > 0.03 ? -Math.round(clamp(10 + (clipped - 0.03) * 300, 10, 30)) : 0;
+  // Sombras: un poco de aire solo si la foto tiene mucha zona oscura
+  const sh = p25 < 0.16 ? Math.round(clamp((0.2 - p25) * 120, 4, 18)) : 0;
+  // Contraste: conservarlo; algo más si la foto quedó chata
+  const spread = p75 - p25;
+  let con = spread < 0.22 ? 12 : spread < 0.32 ? 8 : 5;
+  // Balance de blancos: corrige la mitad del tinte, así no se pierde la calidez de un salón ni la piel
+  // (enfriar se limita más que entibiar: la luz cálida de un salón y la piel quedan mejor así)
   let temp = 0, tint = 0;
   if (nn > L.length * 0.02) {
     const r = sr/nn, g = sg/nn, b = sb/nn;
-    temp = clamp((b - r) / (0.28*(b + r)) * 0.5, -0.25, 0.25) * 100;
-    tint = clamp((1 - ((r + b)/2) / g) / 0.22 * 0.3, -0.15, 0.15) * 100;
+    temp = clamp((b - r) / (0.28*(b + r)) * 0.35, -0.08, 0.12) * 100;
+    tint = clamp((1 - ((r + b)/2) / g) / 0.22 * 0.25, -0.08, 0.08) * 100;
   }
-  return {
-    exp: Math.round(ev*20)/20,
-    wh: Math.round(clamp((1 - w0) / 0.15 * 100 * 0.7, -30, 40)),
-    bl: Math.round(clamp(-b0 / 0.10 * 100 * 0.6, -25, 20)),
-    hi: bright / L.length > 0.02 ? -40 : -20,
-    sh: p25 < 0.22 ? 30 : 12,
-    temp: Math.round(temp), tint: Math.round(tint),
+  const out = {
+    exp: Math.round(ev*20)/20, con, hi, sh, wh: Math.round(wh), bl: Math.round(bl),
+    temp: Math.round(temp), tint: Math.round(tint), vib: 8, sat: 0,
   };
+  // Variantes: Vivo (más color y contraste) y Suave (más luz en sombras, menos contraste)
+  if (mode === 'vivo') Object.assign(out, { con: con + 10, vib: 20, sat: 5, bl: Math.round(Math.min(bl, 0) - 6), cla: 8 });
+  if (mode === 'suave') Object.assign(out, { con: Math.max(0, con - 9), hi: hi - 8, sh: sh + 8, vib: 5, bl: Math.round(Math.max(bl, -8) + 4), cla: -5 });
+  return out;
 }
+const AUTO_MODES = { natural: 'Natural', vivo: 'Vivo', suave: 'Suave' };
+let autoMode = 'natural';
+try { autoMode = localStorage.getItem('revelado-auto-mode') || 'natural'; } catch { /* sin almacenamiento */ }
+if (!AUTO_MODES[autoMode]) autoMode = 'natural';
 const STYLE_KEYS = ['con', 'vib', 'sat', 'cla', 'sharp', 'vig', 'bw'];
 
 function autoTone() {
   const p = cur(); if (!p || !previewBitmap) return;
-  const a = analyze(previewBitmap);
+  const a = analyze(previewBitmap, autoMode);
   p.auto = a;
-  change((s) => { Object.assign(s, a, { con: s.con || 8, vib: s.vib || 12 }); });
-  toast('Ajuste automático aplicado');
+  change((s) => { Object.assign(s, a); });
+  toast(`Auto ${AUTO_MODES[autoMode]} aplicado`);
 }
 
 // Auto a todas las seleccionadas: cada foto se analiza por separado (luz y balance de blancos)
@@ -897,21 +936,21 @@ async function autoBatch() {
   const list = [...state.sel].map((i) => state.photos[i]);
   if (list.length < 2) return toast('Seleccioná varias fotos en la tira de abajo (o "Seleccionar todas").');
   const style = pick(base.s, STYLE_KEYS);
-  if (!style.con && !style.vib && !style.cla) Object.assign(style, { con: 8, vib: 12 });
+  const plain = !style.con && !style.vib && !style.cla && !style.sat;
   const warm = base.s.temp - (base.auto?.temp ?? 0), green = base.s.tint - (base.auto?.tint ?? 0);
   const btn = $('btn-auto-batch'); btn.disabled = true;
   let n = 0;
-  const usedNames = new Set();
   for (const p of list) {
     try {
       let img = null;
       const { thumb } = await readExif(p.file);
       if (thumb) img = await createImageBitmap(thumb);
       else img = await createImageBitmap(p.file, { resizeWidth: 256, resizeQuality: 'low' });
-      const a = analyze(img); img.close?.();
+      const a = analyze(img, autoMode); img.close?.();
       p.hist.push(structuredClone(p.s));
       p.auto = a;
-      Object.assign(p.s, a, structuredClone(style), { temp: a.temp + warm, tint: a.tint + green });
+      // si la foto base no tiene estilo propio, cada una queda con el Auto elegido; si lo tiene, se copia ese estilo
+      Object.assign(p.s, a, plain ? {} : structuredClone(style), { temp: a.temp + warm, tint: a.tint + green });
       save(p);
     } catch (e) { console.error(p.name, e); }
     n++;
@@ -1271,6 +1310,11 @@ for (const id of ['btn-resume', 'btn-resume-2']) $(id)?.addEventListener('click'
 $('btn-prev').addEventListener('click', () => selectPhoto(state.cur - 1));
 $('btn-next').addEventListener('click', () => selectPhoto(state.cur + 1));
 $('btn-auto').addEventListener('click', autoTone);
+$('auto-mode').value = autoMode;
+$('auto-mode').addEventListener('change', (e) => {
+  autoMode = e.target.value; try { localStorage.setItem('revelado-auto-mode', autoMode); } catch { /* nada */ }
+  e.target.blur();
+});
 $('btn-auto-batch').addEventListener('click', autoBatch);
 $('btn-reset').addEventListener('click', () => change((s) => { Object.assign(s, freshSettings()); }));
 $('btn-undo').addEventListener('click', undo);
@@ -1342,9 +1386,21 @@ stage.addEventListener('drop', (e) => {
 });
 
 document.addEventListener('keydown', (e) => {
-  if (!$('modal').hidden || e.target.matches('input[type=text], select')) return;
-  if (e.target.matches('input[type=range]') && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) return;
+  // Campos que usan el teclado (textos, números, listas, deslizadores enfocados): las flechas son de ellos
+  if (!$('modal').hidden || e.target.matches('input:not([type=checkbox]):not([type=radio]):not([type=range]), textarea, select, [contenteditable]')) return;
+  const arrow = e.key.startsWith('Arrow');
+  if (arrow && e.target.matches('input[type=range]')) return;
   const mod = e.ctrlKey || e.metaKey;
+  if (arrow && (maskDrag || e.altKey)) return;
+  if (arrow && state.cropMode) {
+    // con Recortar activo, las flechas mueven la foto dentro del marco (Shift: pasos más grandes)
+    const p = cur(); if (!p) return;
+    e.preventDefault();
+    const st = e.shiftKey ? .02 : .004, d = { ArrowLeft: [-st, 0], ArrowRight: [st, 0], ArrowUp: [0, -st], ArrowDown: [0, st] }[e.key];
+    const p0 = { ...(p.s.pan || { x: 0, y: 0 }) };
+    fitPan(p.s, engine.w, engine.h, { x: p0.x + d[0], y: p0.y + d[1] }, p0); draw(); save(p);
+    return;
+  }
   if (e.key === 'ArrowRight') { e.preventDefault(); selectPhoto(state.cur + 1); }
   else if (e.key === 'ArrowLeft') { e.preventDefault(); selectPhoto(state.cur - 1); }
   else if (e.key === '\\') setBefore(!state.before);
