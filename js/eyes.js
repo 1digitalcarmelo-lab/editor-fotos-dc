@@ -56,13 +56,15 @@ export async function analyzeEyes(file) {
   return { v: EYES_VERSION, faces };
 }
 
-/** Estado de los ojos de una cara: 'closed' (cerrados), 'half' (entrecerrados) o null (abiertos).
- *  Umbrales iniciales; se afinan con fotos reales de eventos. */
-export const CLOSED_AT = 0.45, HALF_AT = 0.3;
+/** Estado de los ojos de una cara: 'closed' (cerrados), 'half' (entrecerrados o mirando abajo) o null (abiertos).
+ *  Calibrado con fotos reales de una boda (salón, flash): abiertos < 0.4; sonrisa que achina 0.45-0.6;
+ *  cerrados > 0.55 en los dos ojos. Las caras muy chicas del fondo (< 2,5 % del ancho) no se marcan. */
+export const CLOSED_AT = 0.55, HALF_AT = 0.42, MIN_FACE = 0.025;
 export function faceState(f) {
+  if (f.w < MIN_FACE) return null;
   const hi = Math.max(f.blinkL, f.blinkR), lo = Math.min(f.blinkL, f.blinkR);
-  if (hi >= CLOSED_AT && lo >= CLOSED_AT * 0.8) return 'closed';
-  if (hi >= HALF_AT && lo >= HALF_AT * 0.75) return 'half';
+  if (hi >= CLOSED_AT && lo >= 0.4) return 'closed';
+  if (hi >= HALF_AT && lo >= 0.25) return 'half';
   return null;
 }
 export function faceClosed(f) { return !!faceState(f); }
