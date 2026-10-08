@@ -2,7 +2,7 @@
 import { Engine, DEFAULTS, freshSettings, frameSize, outSize, fitPan, ensurePan } from './engine.js';
 import { readExif, withExif, orientationCss } from './exif.js';
 import * as store from './store.js';
-import { EYES_VERSION, faceState, closedCount } from './eyes.js';
+import { EYES_VERSION, faceState, closedCount, applyEyePatches } from './eyes.js';
 
 const $ = (id) => document.getElementById(id);
 const PREVIEW_MAX = 2560;
@@ -128,7 +128,7 @@ const cur = () => state.photos[state.cur];
 const keyOf = (f) => `${f.name}|${f.size}|${f.lastModified}`;
 const naturalSort = (a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
 function isEdited(s) {
-  return TONE_KEYS.some((k) => (s[k] || 0) !== (DEFAULTS[k] || 0)) || s.rot || s.ang || s.fill || s.pan?.x || s.pan?.y || s.persH || s.persV
+  return TONE_KEYS.some((k) => (s[k] || 0) !== (DEFAULTS[k] || 0)) || s.rot || s.ang || s.fill || s.pan?.x || s.pan?.y || s.persH || s.persV || (s.eyePatches?.length > 0)
     || s.crop.x || s.crop.y || s.crop.w !== 1 || s.crop.h !== 1 || (s.masks?.length > 0) || (s.redEyes?.length > 0);
 }
 function pick(s, keys) { const o = {}; for (const k of keys) o[k] = structuredClone(s[k]); return o; }
@@ -450,7 +450,7 @@ function refreshStrip() {
     el.classList.toggle('cur', i === state.cur);
     el.classList.toggle('sel', state.sel.has(i));
     el.classList.toggle('edited', isEdited(p.s));
-    el.classList.toggle('eyes-closed', closedCount(p.eyes) > 0);
+    el.classList.toggle('eyes-closed', openCount(p) > 0);
   }
   const n = state.sel.size;
   $('strip-count').textContent = `${state.photos.length} fotos · ${n} seleccionada${n === 1 ? '' : 's'}`;
@@ -476,11 +476,19 @@ $('thumbs').addEventListener('click', (e) => {
 });
 
 // ---------------------------------------------------------------- foto actual
+// La vista previa depende también de los parches de ojos (si se agregan o se deshacen, se vuelve a armar)
+const previewKey = (p) => p.key + '|' + (p.s.eyePatches || []).map((x) => x.id).join(',');
+const patchBlob = (id) => store.get('eyepatch:' + id);
+async function sourceBitmap(p) {
+  const bmp = await createImageBitmap(p.file, { imageOrientation: 'from-image' });
+  return p.s.eyePatches?.length ? applyEyePatches(bmp, p.s.eyePatches, patchBlob) : bmp;
+}
 async function getPreview(p) {
-  if (state.previews.has(p.key)) {
-    const b = state.previews.get(p.key); state.previews.delete(p.key); state.previews.set(p.key, b); return b;
+  const pk = previewKey(p);
+  if (state.previews.has(pk)) {
+    const b = state.previews.get(pk); state.previews.delete(pk); state.previews.set(pk, b); return b;
   }
-  const full = await createImageBitmap(p.file, { imageOrientation: 'from-image' });
+  const full = await sourceBitmap(p);
   p.w = full.width; p.h = full.height;
   const k = Math.min(1, PREVIEW_MAX / Math.max(full.width, full.height));
   let bmp = full;
@@ -488,7 +496,7 @@ async function getPreview(p) {
     bmp = await createImageBitmap(full, { resizeWidth: Math.round(full.width*k), resizeHeight: Math.round(full.height*k), resizeQuality: 'high' });
     full.close();
   }
-  state.previews.set(p.key, bmp);
+  state.previews.set(pk, bmp);
   while (state.previews.size > 5) {
     const [oldKey, old] = state.previews.entries().next().value;
     if (old === previewBitmap) break;
@@ -515,7 +523,7 @@ async function selectPhoto(i, resetSel = true) {
   try {
     const bmp = await getPreview(p);
     if (token !== state.loadToken) return;
-    previewBitmap = bmp;
+    previewBitmap = bmp; state.loadedKey = previewKey(p);
     engine.setImage(bmp);
     draw();
   } catch (e) {
@@ -538,6 +546,9 @@ function draw() {
 
 function drawNow() {
   const p = cur(); if (!p || !previewBitmap) return;
+  if (state.loadedKey && state.loadedKey !== previewKey(p) && !state.reloading) {
+    state.reloading = true; selectPhoto(state.cur, false).finally(() => { state.reloading = false; });
+  }
   const vp = $('viewport');
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   const [ow, oh] = outSize(p.s, engine.w, engine.h, state.cropMode);
@@ -686,6 +697,7 @@ function syncSliders() {
     el.wrap.classList.toggle('changed', v !== 0);
   }
   $('chk-bw').checked = !!p.s.bw;
+  $('btn-eyes-clear').hidden = !p.s.eyePatches?.length;
   updatePresetSelect();
   $('aspect-select').value = p.s.aspect === '7:5' ? 'p15x21' : (p.s.aspect || 'libre');
   if (!$('aspect-select').value) $('aspect-select').value = 'libre';
@@ -1526,7 +1538,7 @@ async function runExport() {
   for (const [idx, p] of list.entries()) {
     if (cancelExport) break;
     try {
-      let bmp = await createImageBitmap(p.file, { imageOrientation: 'from-image' });
+      let bmp = await sourceBitmap(p);
       if (Math.max(bmp.width, bmp.height) > exp.maxTex) {
         const k = exp.maxTex / Math.max(bmp.width, bmp.height);
         const b2 = await createImageBitmap(bmp, { resizeWidth: Math.floor(bmp.width*k), resizeHeight: Math.floor(bmp.height*k), resizeQuality: 'high' });
@@ -1577,12 +1589,82 @@ function renderEyesOverlay() {
   const s = p.s, plain = !s.rot && !s.ang && s.crop.x === 0 && s.crop.y === 0 && s.crop.w === 1 && s.crop.h === 1 && !s.pan?.x && !s.pan?.y && !s.fill && !s.persH && !s.persV;
   if (!plain) return;
   const f = maskFrame();
-  for (const face of p.eyes.faces) {
-    const st = faceState(face); if (!st) continue;
+  p.eyes.faces.forEach((face, fi) => {
+    const st = faceState(face); if (!st || faceFixed(p, face)) return;
     const d = document.createElement('div'); d.className = `eye-mark ${st}`;
+    d.addEventListener('click', (e) => { e.stopPropagation(); openEyeFix(fi); });
+    d.addEventListener('pointerdown', (e) => e.stopPropagation());
     Object.assign(d.style, { left: f.left + face.x * f.w + 'px', top: f.top + face.y * f.h + 'px', width: face.w * f.w + 'px', height: face.h * f.h + 'px' });
-    d.title = `${st === 'closed' ? 'Ojos cerrados' : 'Ojos entrecerrados'} (izq. ${Math.round(face.blinkL * 100)} % · der. ${Math.round(face.blinkR * 100)} %)`;
+    d.title = `${st === 'closed' ? 'Ojos cerrados' : 'Ojos entrecerrados'} · clic para abrirlos con otra foto`;
     host.appendChild(d);
+  });
+}
+// ¿Esta cara ya tiene un parche de ojos?
+function faceFixed(p, face) {
+  const cx = face.x + face.w / 2, cy = face.y + face.h * 0.4;
+  return (p.s.eyePatches || []).some((pa) => cx > pa.x && cx < pa.x + pa.w && cy > pa.y - pa.h && cy < pa.y + pa.h * 2);
+}
+const openCount = (p) => (p.eyes?.faces || []).filter((f) => faceState(f) && !faceFixed(p, f)).length;
+
+// Abrir ojos: elegís de qué foto parecida tomar los ojos; se arma el parche y ves antes / después.
+async function openEyeFix(fi) {
+  const p = cur(), face = p?.eyes?.faces?.[fi]; if (!face) return;
+  const eyes = await import('./eyes.js');
+  modal(`<h2>Abrir ojos</h2>
+    <p class="muted">Elegí la foto de donde tomar los ojos (la más parecida: misma persona, misma posición de la cara). Se copia solo el ojo, se acomoda y se funde con la piel; las cejas y la piel de la otra foto no pasan.</p>
+    <div id="fix-status" class="muted">Buscando fotos parecidas…</div>
+    <div class="fix-grid" id="fix-grid"></div>
+    <div class="fix-preview" id="fix-preview" hidden><div><b>Antes</b><div id="fix-before"></div></div><div><b>Después</b><div id="fix-after"></div></div></div>
+    <div class="modal-actions" id="fix-actions"><button class="btn ghost" data-close>Cancelar</button></div>`);
+  const i0 = p.i, near = state.photos.filter((x) => x !== p && Math.abs(x.i - i0) <= 8).sort((a, b) => Math.abs(a.i - i0) - Math.abs(b.i - i0));
+  // revisar las vecinas que todavía no se analizaron
+  let k = 0;
+  for (const x of near) {
+    if (x.eyes?.v !== EYES_VERSION) {
+      $('fix-status').textContent = `Revisando fotos vecinas… ${++k}`;
+      try { x.eyes = await eyes.analyzeEyes(x.file); store.set('eyes:' + keyOf(x.file), x.eyes); } catch (e) { console.warn(e); }
+    }
+    if ($('modal').hidden) return;
+  }
+  // candidatas: caras con ojos bien abiertos, parecidas en tamaño y lugar
+  const cx = face.x + face.w / 2, cy = face.y + face.h / 2;
+  const cands = [];
+  for (const x of near) for (const f of x.eyes?.faces || []) {
+    if (faceState(f) || Math.max(f.blinkL, f.blinkR) > 0.35 || f.w < 0.02) continue;
+    const r = f.w / face.w; if (r < 0.45 || r > 2.2) continue;
+    const d = Math.hypot(f.x + f.w / 2 - cx, f.y + f.h / 2 - cy) + Math.abs(Math.log(r)) * 0.3 + Math.abs(x.i - i0) * 0.01;
+    cands.push({ x, f, d });
+  }
+  cands.sort((a, b) => a.d - b.d);
+  const top = cands.slice(0, 12);
+  if (!top.length) { $('fix-status').textContent = 'No encontré caras con ojos abiertos en las fotos de al lado (8 antes y 8 después).'; return; }
+  $('fix-status').textContent = 'Tocá la cara de donde tomar los ojos:';
+  for (const c of top) {
+    const b = document.createElement('button'); b.className = 'fix-cand'; b.title = c.x.name;
+    b.innerHTML = `<span>${escapeHtml(c.x.name.replace(/\.[^.]+$/, ''))}</span>`;
+    eyes.faceThumb(c.x.file, c.f, 110).then((cv) => b.prepend(cv)).catch(() => {});
+    b.onclick = async () => {
+      document.querySelectorAll('.fix-cand').forEach((el) => el.classList.toggle('on', el === b));
+      $('fix-status').textContent = 'Armando el arreglo…';
+      try {
+        const res = await eyes.buildEyePatch(p.file, face, c.x.file, c.f);
+        const fit = (cv) => { cv.style.width = '100%'; cv.style.height = 'auto'; return cv; };
+        $('fix-before').replaceChildren(fit(res.before)); $('fix-after').replaceChildren(fit(res.after));
+        $('fix-preview').hidden = false;
+        $('fix-status').textContent = `Ojos tomados de ${c.x.name}. Si no queda natural, probá con otra.`;
+        $('fix-actions').innerHTML = '<button class="btn ghost" data-close>Cancelar</button><button class="btn gold" id="fix-ok">Aplicar</button>';
+        $('fix-ok').onclick = async () => {
+          const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+          await store.set('eyepatch:' + id, res.blob);
+          change((s) => {
+            s.eyePatches = (s.eyePatches || []).filter((pa) => !(pa.x < res.x + res.w && pa.x + pa.w > res.x && pa.y < res.y + res.h && pa.y + pa.h > res.y));
+            s.eyePatches.push({ id, x: res.x, y: res.y, w: res.w, h: res.h, from: c.x.name });
+          });
+          closeModal(); refreshStrip(); toast('Ojos abiertos. Se puede deshacer (Ctrl+Z) o quitar con «Quitar arreglo de ojos».', 5000);
+        };
+      } catch (e) { console.error(e); $('fix-status').textContent = 'No se pudo con esa foto: ' + (e.message || 'probá con otra.'); }
+    };
+    $('fix-grid').appendChild(b);
   }
 }
 let eyesBusy = false, eyesStop = false;
@@ -1591,7 +1673,7 @@ async function findClosedEyes() {
   const sel = [...state.sel].map((i) => state.photos[i]).filter(Boolean);
   const pending = (list) => list.filter((p) => p.eyes?.v !== EYES_VERSION);
   const showResult = () => {
-    const closed = state.photos.filter((p) => closedCount(p.eyes) > 0);
+    const closed = state.photos.filter((p) => openCount(p) > 0);
     state.showEyes = true;
     if (closed.length) { state.sel = new Set(closed.map((p) => p.i)); state.anchor = closed[0].i; }
     refreshStrip(); draw();
@@ -1642,6 +1724,7 @@ async function findClosedEyes() {
   };
 }
 $('btn-eyes').addEventListener('click', findClosedEyes);
+$('btn-eyes-clear').addEventListener('click', () => { change((s) => { s.eyePatches = []; }); refreshStrip(); toast('Arreglo de ojos quitado'); });
 
 // ---------------------------------------------------------------- botones y teclado
 for (const id of ['btn-folder', 'btn-folder-2']) $(id).addEventListener('click', openFolder);
@@ -1683,8 +1766,8 @@ $('btn-remove-photo').addEventListener('click', () => {
   const p = cur();
   if (!p) return;
   if (state.photos.length <= 1) return toast('No se puede quitar la última foto de la sesión');
-  const preview = state.previews.get(p.key);
-  state.previews.delete(p.key);
+  const preview = state.previews.get(previewKey(p));
+  state.previews.delete(previewKey(p));
   state.photos.splice(state.cur, 1);
   releaseThumb(p.thumbUrl); // solo si ninguna otra foto (un duplicado) la sigue usando
   if (preview) setTimeout(() => { if (preview !== previewBitmap) preview.close?.(); }, 1500);
