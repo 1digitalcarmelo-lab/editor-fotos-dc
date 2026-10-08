@@ -73,6 +73,7 @@ button:disabled { opacity: .45; cursor: default; }
 .empty-card { max-width: 520px; text-align: center; padding: 36px 28px; border: 1.5px dashed var(--line); border-radius: 22px; background: var(--panel); }
 .empty-card h1 { font-size: 24px; margin: 16px 0 8px; font-weight: 700; }
 .empty-card p { color: var(--soft); margin: 6px 0; }
+.resume-info { color: var(--gold-soft); font-size: 13px; margin: 0 0 8px; }
 .empty-actions { display: flex; gap: 10px; justify-content: center; margin: 18px 0 10px; flex-wrap: wrap; }
 
 /* Panel de ajustes */

@@ -17,7 +17,7 @@
   <div class="top-actions">
     <button class="btn ghost" id="btn-install" hidden title="Instalarlo en la compu, con ícono propio">⊕ Instalar</button>
     <button class="btn ghost" id="btn-backup" title="Copia de seguridad de tus ediciones">💾 Copia de ajustes</button>
-    <button class="btn" id="btn-resume" hidden>↺ Seguir con la última carpeta</button>
+    <button class="btn" id="btn-resume" hidden title="Vuelve a abrir la última carpeta con tus fotos, el orden y las ediciones">↺ Continuar última sesión</button>
     <button class="btn" id="btn-folder">📁 Abrir carpeta</button>
     <button class="btn ghost" id="btn-files">Elegir fotos</button>
     <input type="file" id="file-input" accept="image/jpeg,image/png,image/webp" multiple hidden>
@@ -46,9 +46,11 @@
         <h1>Revelá tus fotos de un evento, todas juntas</h1>
         <p>Abrí la carpeta con las fotos (JPG). Se editan acá en tu compu: <b>no se suben a ningún lado</b>.</p>
         <div class="empty-actions">
+          <button class="btn gold" id="btn-resume-2" hidden>↺ Continuar última sesión</button>
           <button class="btn gold" id="btn-folder-2">📁 Abrir carpeta</button>
           <button class="btn ghost" id="btn-files-2">Elegir fotos</button>
         </div>
+        <p class="resume-info" id="resume-info" hidden></p>
         <p class="muted">Con "Abrir carpeta" elegís la carpeta entera: en esa ventana solo se ven carpetas, no las fotos (es normal). También podés arrastrar las fotos acá.</p>
       </div>
     </div>

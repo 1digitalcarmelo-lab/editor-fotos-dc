@@ -179,25 +179,146 @@ async function resumeFolder() {
   } catch { toast('No se pudo abrir la carpeta anterior. Elegila de nuevo.'); }
 }
 
-async function loadFiles(fileList, sidecar = {}) {
-  const files = [...fileList].filter((f) => EXTS.test(f.name)).sort((a, b) => naturalSort(a.name, b.name));
-  if (!files.length) return;
+async function loadFiles(fileList, sidecar = {}, handles = null) {
+  // handles (opcional): FileSystemFileHandle de cada archivo, para poder reabrir la sesión sin volver a elegirlas
+  const pairs = [...fileList].map((file, k) => ({ file, handle: handles ? handles[k] : null }))
+    .filter((e) => EXTS.test(e.file.name)).sort((a, b) => naturalSort(a.file.name, b.file.name));
+  if (!pairs.length) return;
+  await startSession(pairs, { sidecar });
+  toast(`${pairs.length} fotos abiertas`);
+}
+
+// Arma la sesión a partir de una lista ordenada de { file, handle?, name?, key?, dup? }.
+async function startSession(entries, { sidecar = {}, cur = 0, removed = [] } = {}) {
   for (const p of state.photos) if (p.thumbUrl) URL.revokeObjectURL(p.thumbUrl);
   for (const b of state.previews.values()) b.close?.();
   state.previews.clear();
-  state.photos = files.map((file, i) => ({ i, file, name: file.name, key: keyOf(file), s: freshSettings(), hist: [], thumbUrl: null, orient: 1 }));
-  // Ajustes guardados de otras sesiones
+  state.photos = entries.map((e, i) => ({
+    i, file: e.file, handle: e.handle || null, srcName: e.file.name, name: e.name || e.file.name,
+    key: e.key || keyOf(e.file), dup: !!e.dup, s: freshSettings(), hist: [], thumbUrl: null, orient: 1,
+  }));
+  state.removed = [...removed];
+  // Ajustes guardados de otras sesiones (navegador primero, después el archivo de la carpeta)
   await Promise.all(state.photos.map(async (p) => {
-    const saved = (await store.get('edit:' + p.key)) || sidecar[portableKey(p)];
+    const saved = (await store.get('edit:' + p.key)) || (p.dup ? null : sidecar[portableKey(p)]);
     if (saved) p.s = Object.assign(freshSettings(), saved);
   }));
-  state.sel = new Set([0]); state.anchor = 0;
+  const c = Math.max(0, Math.min(state.photos.length - 1, cur | 0));
+  state.sel = new Set([c]); state.anchor = c;
   $('empty').hidden = true;
   for (const id of ['panel', 'strip', 'stage-bar']) $(id).hidden = false;
   $('btn-export').disabled = false;
+  hideResume();
   buildStrip();
-  await selectPhoto(0);
-  toast(`${files.length} fotos abiertas`);
+  await selectPhoto(c);
+  saveSession(true);
+}
+
+// ---------------------------------------------------------------- última sesión
+// Se guarda en este navegador (IndexedDB) la referencia a la carpeta o a los archivos, el orden,
+// los duplicados y las fotos quitadas. Las fotos NO se copian ni se suben: se vuelven a leer del disco.
+// Los ajustes de cada foto siguen guardándose como siempre ("edit:<clave>" + archivo de la carpeta).
+let sessT = 0;
+function sessionRecord() {
+  if (!state.photos.length) return null;
+  const items = state.photos.map((p) => ({ file: p.srcName || p.file.name, name: p.name, key: p.key, dup: !!p.dup }));
+  if (state.dir) return { v: 1, savedAt: Date.now(), kind: 'dir', dir: state.dir, label: state.dir.name, items, removed: state.removed || [], cur: state.cur };
+  if (!state.photos.every((p) => p.handle)) return null; // sin referencias para reabrir (p. ej. Firefox)
+  const handles = [], idx = new Map();
+  for (const p of state.photos) if (!idx.has(p.handle)) { idx.set(p.handle, handles.length); handles.push(p.handle); }
+  state.photos.forEach((p, k) => { items[k].h = idx.get(p.handle); });
+  return { v: 1, savedAt: Date.now(), kind: 'files', handles, label: '', items, removed: [], cur: state.cur };
+}
+function saveSession(now = false) {
+  clearTimeout(sessT);
+  const run = () => { const rec = sessionRecord(); if (rec) store.set('session', rec); };
+  if (now) run(); else sessT = setTimeout(run, 700);
+}
+window.addEventListener('pagehide', () => saveSession(true));
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') saveSession(true); });
+
+async function sessionPermission(ses, ask) {
+  const list = ses.kind === 'dir' ? [ses.dir] : ses.handles;
+  for (const h of list) {
+    if (!h?.queryPermission) return 'denied';
+    let st = await h.queryPermission({ mode: ses.kind === 'dir' ? 'readwrite' : 'read' });
+    if (st !== 'granted' && ses.kind === 'dir') st = (await h.queryPermission({ mode: 'read' })) === 'granted' ? 'granted' : st;
+    if (st !== 'granted' && ask) {
+      st = await h.requestPermission({ mode: ses.kind === 'dir' ? 'readwrite' : 'read' });
+      if (st !== 'granted' && ses.kind === 'dir') st = await h.requestPermission({ mode: 'read' });
+    }
+    if (st !== 'granted') return st;
+  }
+  return 'granted';
+}
+
+async function restoreSession(ses) {
+  $('loading').hidden = false;
+  try {
+    let sidecar = {}, pickFor;
+    const extra = [];
+    if (ses.kind === 'dir') {
+      const byName = new Map();
+      for await (const [name, h] of ses.dir.entries()) if (h.kind === 'file' && EXTS.test(name)) byName.set(name, h);
+      pickFor = (it) => byName.get(it.file);
+      sidecar = await readSidecar(ses.dir);
+      // fotos nuevas que aparecieron en la carpeta (no las que quitaste a propósito)
+      const known = new Set([...ses.items.map((it) => it.file), ...(ses.removed || [])]);
+      for (const n of [...byName.keys()].filter((n) => !known.has(n)).sort(naturalSort)) extra.push({ file: n, name: n });
+    } else pickFor = (it) => ses.handles[it.h];
+    const all = [...ses.items, ...extra];
+    const entries = new Array(all.length);
+    let missing = 0, next = 0;
+    const worker = async () => {
+      while (next < all.length) {
+        const k = next++, it = all[k], h = pickFor(it);
+        if (!h) { missing++; continue; }
+        try {
+          const file = await h.getFile();
+          // si el archivo cambió en el disco, la clave guardada del duplicado igual se respeta
+          entries[k] = { file, handle: ses.kind === 'files' ? h : null, name: it.name, key: it.dup ? it.key : undefined, dup: it.dup };
+        } catch { missing++; }
+      }
+    };
+    await Promise.all(Array.from({ length: 8 }, worker));
+    const list = entries.filter(Boolean);
+    if (!list.length) { toast('No encontré las fotos de la última sesión. Abrí la carpeta de nuevo.', 5000); return false; }
+    state.dir = ses.kind === 'dir' ? ses.dir : null;
+    if (state.dir) store.set('lastDir', state.dir);
+    // la foto en la que estabas (por posición, corrigiendo por las que falten)
+    const curIdx = Math.min(list.length - 1, entries.slice(0, (ses.cur | 0) + 1).filter(Boolean).length - 1);
+    await startSession(list, { sidecar, cur: Math.max(0, curIdx), removed: ses.removed || [] });
+    hideResume();
+    toast(`Sesión recuperada: ${list.length} fotos${missing ? ` (${missing} ya no están en el disco)` : ''}${extra.length ? ` · ${extra.length} nuevas` : ''}`, 4000);
+    return true;
+  } finally { $('loading').hidden = true; }
+}
+
+function showResume(ses) {
+  const n = ses.items?.length || 0;
+  const label = '↺ Continuar última sesión';
+  for (const id of ['btn-resume', 'btn-resume-2']) { const b = $(id); if (b) { b.hidden = false; b.textContent = label; } }
+  $('btn-folder-2')?.classList.replace('gold', 'ghost'); // el botón principal pasa a ser "Continuar"
+  const info = $('resume-info');
+  if (info) {
+    const when = ses.savedAt ? new Date(ses.savedAt).toLocaleString('es-AR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false }) : '';
+    info.textContent = `${n} fotos${ses.label ? ` de la carpeta «${ses.label}»` : ''}${when ? ` · ${when}` : ''}. Un clic y seguís donde quedaste.`;
+    info.hidden = false;
+  }
+}
+function hideResume() { for (const id of ['btn-resume', 'btn-resume-2', 'resume-info']) { const b = $(id); if (b) b.hidden = true; } }
+
+async function resumeLast() {
+  const ses = await store.get('session');
+  if (ses?.items?.length) {
+    try {
+      const st = await sessionPermission(ses, true);
+      if (st !== 'granted') return toast('Sin permiso para leer la carpeta. Tocá de nuevo y elegí "Permitir".', 5000);
+      await restoreSession(ses);
+    } catch (e) { console.warn(e); toast('No se pudo reabrir la última sesión. Abrí la carpeta de nuevo.', 5000); }
+    return;
+  }
+  return resumeFolder();
 }
 
 // ---------------------------------------------------------------- tira de fotos
@@ -314,6 +435,7 @@ async function selectPhoto(i, resetSel = true) {
   if (state.cropMode) exitCrop();
   state.cur = i;
   state.selectedMask = -1;
+  saveSession();
   if (resetSel && !state.sel.has(i)) { state.sel = new Set([i]); state.anchor = i; }
   const p = cur();
   $('photo-name').textContent = `${i + 1} / ${state.photos.length} · ${p.name}`;
@@ -1077,10 +1199,20 @@ $('btn-export').addEventListener('click', openExport);
 
 // ---------------------------------------------------------------- botones y teclado
 for (const id of ['btn-folder', 'btn-folder-2']) $(id).addEventListener('click', openFolder);
-for (const id of ['btn-files', 'btn-files-2']) $(id).addEventListener('click', () => $('file-input').click());
+// Con showOpenFilePicker quedan referencias (handles) a cada archivo y la sesión se puede reabrir.
+async function pickFiles() {
+  if (!window.showOpenFilePicker) { $('file-input').click(); return; }
+  try {
+    const hs = await window.showOpenFilePicker({ multiple: true, id: 'revelado-fotos', excludeAcceptAllOption: false,
+      types: [{ description: 'Fotos', accept: { 'image/jpeg': ['.jpg', '.jpeg'], 'image/png': ['.png'], 'image/webp': ['.webp'] } }] });
+    const files = await Promise.all(hs.map((h) => h.getFile()));
+    state.dir = null; await loadFiles(files, {}, hs);
+  } catch (e) { if (e.name !== 'AbortError') $('file-input').click(); }
+}
+for (const id of ['btn-files', 'btn-files-2']) $(id).addEventListener('click', pickFiles);
 $('btn-backup').addEventListener('click', openBackup);
 $('file-input').addEventListener('change', (e) => { state.dir = null; loadFiles(e.target.files); e.target.value = ''; });
-$('btn-resume').addEventListener('click', resumeFolder);
+for (const id of ['btn-resume', 'btn-resume-2']) $(id)?.addEventListener('click', resumeLast);
 $('btn-prev').addEventListener('click', () => selectPhoto(state.cur - 1));
 $('btn-next').addEventListener('click', () => selectPhoto(state.cur + 1));
 $('btn-auto').addEventListener('click', autoTone);
@@ -1093,8 +1225,8 @@ $('btn-zoom-out').addEventListener('click', () => { state.zoom = Math.max(.25, +
 $('btn-zoom-fit').addEventListener('click', () => { state.zoom = 1; state.panX = 0; state.panY = 0; draw(); });
 $('btn-duplicate').addEventListener('click', () => {
   const p = cur(); if (!p) return;
-  const copy = { ...p, i: state.photos.length, name: p.name.replace(/(\.[^.]+)$/, '-copia$1'), key: `${p.key}|copy|${Date.now()}`, s: structuredClone(p.s), hist: [], thumbUrl: null };
-  state.photos.push(copy); state.sel = new Set([copy.i]); state.anchor = copy.i; buildStrip(); selectPhoto(copy.i); toast('Foto duplicada en la sesión');
+  const copy = { ...p, i: state.photos.length, name: p.name.replace(/(\.[^.]+)$/, '-copia$1'), key: `${p.key}|copy|${Date.now()}`, dup: true, s: structuredClone(p.s), hist: [], thumbUrl: null };
+  state.photos.push(copy); save(copy, false); state.sel = new Set([copy.i]); state.anchor = copy.i; buildStrip(); selectPhoto(copy.i); saveSession(); toast('Foto duplicada en la sesión');
 });
 $('btn-remove-photo').addEventListener('click', () => {
   const p = cur();
@@ -1104,10 +1236,12 @@ $('btn-remove-photo').addEventListener('click', () => {
   const preview = state.previews.get(p.key);
   preview?.close?.(); state.previews.delete(p.key);
   state.photos.splice(state.cur, 1);
+  // que no vuelva a aparecer al reabrir la sesión (salvo que quede otra copia de la misma foto)
+  if (!p.dup && !state.photos.some((x) => !x.dup && x.srcName === p.srcName)) (state.removed ||= []).push(p.srcName);
   state.photos.forEach((photo, i) => { photo.i = i; });
   state.cur = Math.min(state.cur, state.photos.length - 1);
   state.sel = new Set([state.cur]); state.anchor = state.cur; state.selectedMask = -1;
-  buildStrip(); selectPhoto(state.cur); toast('Foto quitada de la sesión (no se borró del disco)');
+  buildStrip(); selectPhoto(state.cur); saveSession(); toast('Foto quitada de la sesión (no se borró del disco)');
 });
 $('btn-guides').addEventListener('click', () => { $('viewport').classList.toggle('guides'); $('btn-guides').classList.toggle('on'); });
 $('btn-red-eye').addEventListener('click', () => {
@@ -1135,6 +1269,19 @@ stage.addEventListener('dragover', (e) => { e.preventDefault(); $('empty').class
 stage.addEventListener('dragleave', () => $('empty').classList.remove('drag'));
 stage.addEventListener('drop', (e) => {
   e.preventDefault(); $('empty').classList.remove('drag');
+  const items = [...(e.dataTransfer.items || [])].filter((it) => it.kind === 'file');
+  if (items.length && items[0].getAsFileSystemHandle) {
+    // Chrome / Edge: guardamos la referencia para poder reabrir la sesión. Si arrastrás una carpeta, se abre entera.
+    const hp = items.map((it) => it.getAsFileSystemHandle());
+    const files = [...e.dataTransfer.files];
+    Promise.all(hp).then(async (hs) => {
+      if (hs.length === 1 && hs[0]?.kind === 'directory') return loadFromDir(hs[0]);
+      const fh = hs.filter((h) => h?.kind === 'file');
+      state.dir = null;
+      if (fh.length === hs.length) loadFiles(await Promise.all(fh.map((h) => h.getFile())), {}, fh); else loadFiles(files);
+    }).catch(() => { state.dir = null; loadFiles(files); });
+    return;
+  }
   if (e.dataTransfer.files.length) { state.dir = null; loadFiles(e.dataTransfer.files); }
 });
 
@@ -1159,12 +1306,18 @@ function escapeHtml(s) { return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&a
 buildSliders();
 loadPresets();
 (async () => {
-  if (window.showDirectoryPicker && await store.get('lastDir')) {
+  const ses = await store.get('session');
+  if (ses?.items?.length && (ses.dir || ses.handles?.length)) {
+    showResume(ses);
+    // Si el navegador conservó el permiso, se reabre sola; si no, queda el botón (un clic).
+    try { if ((await sessionPermission(ses, false)) === 'granted') await restoreSession(ses); } catch { /* queda el botón */ }
+  } else if (window.showDirectoryPicker && await store.get('lastDir')) {
     $('btn-resume').hidden = false;
-    try { await resumeFolder(); } catch { /* queda disponible el botón de reconexión */ }
+    const dir = await store.get('lastDir');
+    try { if ((await dir.queryPermission({ mode: 'readwrite' })) === 'granted') await loadFromDir(dir); } catch { /* queda el botón */ }
   }
 })();
-window.__revelado = { state, engine };
+window.__revelado = { state, engine, loadFromDir }; // para pruebas automáticas
 
 // Instalar como programa (Chrome / Edge: ícono ⊕ en la barra de direcciones)
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').then((reg) => {
