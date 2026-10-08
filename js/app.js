@@ -1366,7 +1366,7 @@ function openExport() {
   <div class="opts">
     <div class="opt"><label class="lbl">Qué fotos</label><div class="radios">
       <label><input type="radio" name="which" value="all" checked> Todas (${all})</label>
-      <label><input type="radio" name="which" value="sel" ${sel < 2 ? 'disabled' : ''}> Las seleccionadas (${sel})</label>
+      <label><input type="radio" name="which" value="sel" ${sel < 1 ? 'disabled' : ''}> Las seleccionadas (${sel})</label>
       <label><input type="radio" name="which" value="ed" ${!ed ? 'disabled' : ''}> Solo las editadas (${ed})</label></div></div>
     <div class="opt"><label class="lbl">Tamaño</label><div class="radios">
       <label><input type="radio" name="size" value="0" checked> Original (máxima calidad)</label>
