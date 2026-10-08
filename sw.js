@@ -1,6 +1,6 @@
 // Revelado DC · permite instalarlo y abrirlo aunque no haya internet.
 // Siempre busca primero la versión nueva; si no hay conexión, usa la guardada.
-const CACHE = 'revelado-dc-v14';
+const CACHE = 'revelado-dc-v15';
 // Lo mínimo para que la app instalada abra sin conexión (con logo e íconos incluidos).
 const CORE = ['./', 'index.html', 'css/app.css', 'js/app.js', 'js/engine.js', 'js/exif.js', 'js/store.js', 'js/vendor/fflate.js', 'manifest.webmanifest',
   'assets/branding/logo-principal.png', 'assets/branding/favicon-32.png', 'assets/branding/favicon-64.png', 'assets/branding/apple-touch-icon.png',

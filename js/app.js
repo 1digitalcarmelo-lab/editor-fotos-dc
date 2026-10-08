@@ -2,6 +2,7 @@
 import { Engine, DEFAULTS, freshSettings, frameSize, outSize, fitPan, ensurePan } from './engine.js';
 import { readExif, withExif, orientationCss } from './exif.js';
 import * as store from './store.js';
+import { EYES_VERSION, faceState, closedCount } from './eyes.js';
 
 const $ = (id) => document.getElementById(id);
 const PREVIEW_MAX = 2560;
@@ -250,6 +251,7 @@ async function startSession(entries, { sidecar = {}, cur = 0, removed = [] } = {
   state.removed = [...removed];
   // Ajustes guardados de otras sesiones (navegador primero, después el archivo de la carpeta)
   await Promise.all(state.photos.map(async (p) => {
+    const ey = await store.get('eyes:' + keyOf(p.file)); if (ey?.v === EYES_VERSION) p.eyes = ey;
     const saved = (await store.get('edit:' + p.key)) || (p.dup ? null : sidecar[portableKey(p)]);
     if (saved) p.s = Object.assign(freshSettings(), saved);
   }));
@@ -448,6 +450,7 @@ function refreshStrip() {
     el.classList.toggle('cur', i === state.cur);
     el.classList.toggle('sel', state.sel.has(i));
     el.classList.toggle('edited', isEdited(p.s));
+    el.classList.toggle('eyes-closed', closedCount(p.eyes) > 0);
   }
   const n = state.sel.size;
   $('strip-count').textContent = `${state.photos.length} fotos · ${n} seleccionada${n === 1 ? '' : 's'}`;
@@ -546,6 +549,7 @@ function drawNow() {
   cv.style.width = (w / dpr) + 'px'; cv.style.height = (h / dpr) + 'px';
   cv.style.transform = `translate(${state.panX}px, ${state.panY}px)`;
   renderMaskOverlay();
+  renderEyesOverlay();
   $('zoom-label').textContent = `${Math.round(state.zoom * 100)}%`;
   $('badge-before').hidden = !state.before;
   if (state.cropMode) placeCrop();
@@ -1564,6 +1568,80 @@ async function runExport() {
   $('exp-actions').innerHTML = '<button class="btn gold" data-close>Cerrar</button>';
 }
 $('btn-export').addEventListener('click', openExport);
+
+// ---------------------------------------------------------------- ojos cerrados (todo local)
+// Marca en la foto las caras con ojos cerrados. Solo cuando la foto no tiene recorte ni giros (si no, el cuadro no coincide).
+function renderEyesOverlay() {
+  const host = $('eyes-overlay'); if (!host) return; host.innerHTML = '';
+  const p = cur(); if (!p?.eyes || !state.showEyes || state.cropMode || state.before) return;
+  const s = p.s, plain = !s.rot && !s.ang && s.crop.x === 0 && s.crop.y === 0 && s.crop.w === 1 && s.crop.h === 1 && !s.pan?.x && !s.pan?.y && !s.fill && !s.persH && !s.persV;
+  if (!plain) return;
+  const f = maskFrame();
+  for (const face of p.eyes.faces) {
+    const st = faceState(face); if (!st) continue;
+    const d = document.createElement('div'); d.className = `eye-mark ${st}`;
+    Object.assign(d.style, { left: f.left + face.x * f.w + 'px', top: f.top + face.y * f.h + 'px', width: face.w * f.w + 'px', height: face.h * f.h + 'px' });
+    d.title = `${st === 'closed' ? 'Ojos cerrados' : 'Ojos entrecerrados'} (izq. ${Math.round(face.blinkL * 100)} % · der. ${Math.round(face.blinkR * 100)} %)`;
+    host.appendChild(d);
+  }
+}
+let eyesBusy = false, eyesStop = false;
+async function findClosedEyes() {
+  if (eyesBusy) return;
+  const sel = [...state.sel].map((i) => state.photos[i]).filter(Boolean);
+  const pending = (list) => list.filter((p) => p.eyes?.v !== EYES_VERSION);
+  const showResult = () => {
+    const closed = state.photos.filter((p) => closedCount(p.eyes) > 0);
+    state.showEyes = true;
+    if (closed.length) { state.sel = new Set(closed.map((p) => p.i)); state.anchor = closed[0].i; }
+    refreshStrip(); draw();
+    toast(closed.length ? `${closed.length} foto${closed.length === 1 ? '' : 's'} con alguien de ojos cerrados o entrecerrados: quedaron seleccionadas y marcadas con 👁 en la tira.` : 'No encontré ojos cerrados en las fotos revisadas.', 6000);
+    if (closed.length && !closed.some((p) => p.i === state.cur)) selectPhoto(closed[0].i, false);
+  };
+  const all = pending(state.photos), mine = pending(sel);
+  if (!all.length) return showResult();
+  modal(`<h2>Buscar ojos cerrados</h2>
+    <p class="muted">Revelado busca las caras y mide si tienen los ojos cerrados. Se hace en tu compu: las fotos no se suben a ningún lado. La primera vez descarga el detector (unos 25 MB) y después funciona sin internet.</p>
+    <div class="opts radios">
+      <label><input type="radio" name="eyes-which" value="all" checked> Todas las fotos (${all.length} sin revisar)</label>
+      <label><input type="radio" name="eyes-which" value="sel" ${mine.length ? '' : 'disabled'}> Las seleccionadas (${mine.length} sin revisar)</label>
+    </div>
+    <div id="eyes-progress" hidden><div class="bar"><i id="eyes-bar"></i></div><p class="muted" id="eyes-text"></p></div>
+    <div class="modal-actions" id="eyes-actions"><button class="btn ghost" data-close>Cancelar</button><button class="btn gold" id="eyes-go">Buscar</button></div>`);
+  $('eyes-go').onclick = async () => {
+    const list = document.querySelector('input[name=eyes-which]:checked').value === 'sel' ? mine : all;
+    eyesBusy = true; eyesStop = false; exporting = true; // que el modal no se cierre por accidente
+    $('eyes-progress').hidden = false;
+    $('eyes-actions').innerHTML = '<button class="btn ghost" id="eyes-cancel">Detener</button>';
+    $('eyes-cancel').onclick = () => { eyesStop = true; };
+    $('eyes-text').textContent = 'Preparando el detector…';
+    const t0 = performance.now(); let done = 0, failed = 0;
+    try {
+      const { analyzeEyes } = await import('./eyes.js');
+      for (const p of list) {
+        if (eyesStop) break;
+        try {
+          const res = await analyzeEyes(p.file);
+          for (const x of state.photos) if (x.file === p.file) x.eyes = res; // duplicados incluidos
+          store.set('eyes:' + keyOf(p.file), res);
+        } catch (e) { console.warn('ojos', p.name, e); failed++; if (done === 0 && failed > 0) throw e; }
+        done++;
+        const el = (performance.now() - t0) / 1000, left = el / done * (list.length - done);
+        $('eyes-bar').style.width = (done / list.length * 100) + '%';
+        $('eyes-text').textContent = `${done} de ${list.length}` + (list.length - done ? ` · faltan ~${left > 90 ? Math.round(left / 60) + ' min' : Math.round(left) + ' s'}` : '');
+        if (done % 10 === 0) refreshStrip();
+        await new Promise((r) => setTimeout(r, 0));
+      }
+    } catch (e) {
+      console.error(e);
+      $('eyes-text').textContent = 'No se pudo preparar el detector en este navegador. Probá con Chrome o Edge actualizados.';
+    }
+    eyesBusy = false; exporting = false;
+    $('eyes-actions').innerHTML = '<button class="btn gold" data-close>Ver resultado</button>';
+    document.querySelector('#eyes-actions [data-close]').addEventListener('click', showResult, { once: true });
+  };
+}
+$('btn-eyes').addEventListener('click', findClosedEyes);
 
 // ---------------------------------------------------------------- botones y teclado
 for (const id of ['btn-folder', 'btn-folder-2']) $(id).addEventListener('click', openFolder);
