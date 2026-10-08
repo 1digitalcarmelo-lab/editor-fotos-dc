@@ -874,13 +874,16 @@ function commit() {
   refreshStrip();
 }
 const saveTimers = new Map();
+function writeEdit(p) { if (isEdited(p.s)) store.set('edit:' + p.key, p.s); else store.del('edit:' + p.key); }
 function save(p, side = true) {
   if (side) scheduleSidecar();
-  clearTimeout(saveTimers.get(p.key));
-  saveTimers.set(p.key, setTimeout(() => {
-    if (isEdited(p.s)) store.set('edit:' + p.key, p.s); else store.del('edit:' + p.key);
-  }, 300));
+  clearTimeout(saveTimers.get(p.key)?.t);
+  saveTimers.set(p.key, { p, t: setTimeout(() => { saveTimers.delete(p.key); writeEdit(p); }, 300) });
 }
+// Al cerrar o esconder la app se guardan ya mismo los cambios que estaban esperando (no se pierde el último)
+function flushSaves() { for (const [k, v] of saveTimers) { clearTimeout(v.t); saveTimers.delete(k); writeEdit(v.p); } }
+window.addEventListener('pagehide', flushSaves);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushSaves(); });
 function change(fn) { const p = cur(); if (!p) return; beginChange(); fn(p.s, p); syncSliders(); draw(); commit(); }
 
 function undo() {
@@ -1286,6 +1289,7 @@ $('modal').addEventListener('click', (e) => { if (e.target.id === 'modal' || e.t
 
 let exporting = false, cancelExport = false;
 function openExport() {
+  const nm = exportNaming();
   const all = state.photos.length, sel = state.sel.size, ed = state.photos.filter((p) => isEdited(p.s)).length;
   const canDir = !!window.showDirectoryPicker;
   modal(`<h2>Exportar fotos</h2><p class="muted">Se guardan como JPG nuevos. Las originales no se tocan.</p>
@@ -1301,28 +1305,60 @@ function openExport() {
       <label><input type="radio" name="size" value="1600"> 1600 px · liviana</label></div></div>
     <div class="opt"><label class="lbl">Calidad JPG: <b id="q-val">92</b></label><input type="range" id="q" min="70" max="100" value="92" style="width:100%;accent-color:var(--gold)"></div>
     <div class="opt"><label class="lbl">Nombre</label><div class="radios">
-      <label><input type="radio" name="nm" value="same" checked> Igual que la original</label>
-      <label><input type="radio" name="nm" value="suffix"> Agregarle "-editada"</label></div></div>
+      <label><input type="radio" name="nm" value="same" ${nm.mode === 'same' ? 'checked' : ''}> Igual que la original</label>
+      <label><input type="radio" name="nm" value="suffix" ${nm.mode === 'suffix' ? 'checked' : ''}> Agregarle "-editada"</label>
+      <label><input type="radio" name="nm" value="seq" ${nm.mode === 'seq' ? 'checked' : ''}> Numeradas en orden</label></div>
+      <div class="seq-opts" id="seq-opts" ${nm.mode === 'seq' ? '' : 'hidden'}>
+        <label>Nombre base <input type="text" id="seq-base" value="${escapeHtml(nm.base)}" maxlength="40" spellcheck="false"></label>
+        <label>Empieza en <input type="number" id="seq-start" value="${nm.start}" min="0" max="999999" step="1"></label>
+        <p class="muted" id="seq-preview"></p>
+      </div></div>
     ${canDir ? '' : '<p class="warn">Tu navegador no permite elegir carpeta: se van a descargar en archivos ZIP de 40 fotos. Para guardar directo en una carpeta usá Chrome o Edge.</p>'}
   </div>
   <div id="exp-progress" hidden><div class="bar"><i id="exp-bar"></i></div><p class="muted" id="exp-text"></p></div>
   <div class="modal-actions" id="exp-actions"><button class="btn ghost" data-close>Cancelar</button><button class="btn gold" id="exp-go">${canDir ? 'Elegir carpeta y exportar' : 'Exportar'}</button></div>`);
   $('q').oninput = (e) => { $('q-val').textContent = e.target.value; };
+  const prev = () => {
+    const mode = document.querySelector('input[name=nm]:checked').value;
+    $('seq-opts').hidden = mode !== 'seq';
+    const which = document.querySelector('input[name=which]:checked').value;
+    const n = which === 'all' ? all : which === 'sel' ? sel : ed;
+    const names = seqNames($('seq-base').value, +$('seq-start').value, n);
+    $('seq-preview').textContent = n ? `Quedan: ${names[0]}${n > 1 ? ` … ${names[n - 1]}` : ''} (en el orden de la tira)` : '';
+  };
+  for (const el of document.querySelectorAll('input[name=nm], input[name=which]')) el.addEventListener('change', prev);
+  $('seq-base').oninput = prev; $('seq-start').oninput = prev; prev();
   $('exp-go').onclick = runExport;
+}
+// Numeración correlativa: base + número con ceros a la izquierda (mínimo 3 cifras, más si hace falta).
+function seqNames(base, start, n) {
+  base = String(base || '').replace(/[\\/:*?"<>|]+/g, '-').trim();
+  start = Math.max(0, Math.floor(+start || 0));
+  const digits = Math.max(3, String(start + Math.max(0, n - 1)).length);
+  return Array.from({ length: n }, (_, k) => `${base}${String(start + k).padStart(digits, '0')}.jpg`);
+}
+function exportNaming() {
+  let v = {};
+  try { v = JSON.parse(localStorage.getItem('revelado-export-names') || '{}'); } catch { /* sin almacenamiento */ }
+  return { mode: ['same', 'suffix', 'seq'].includes(v.mode) ? v.mode : 'same', base: typeof v.base === 'string' ? v.base : 'FIL_', start: Number.isFinite(v.start) ? v.start : 1 };
 }
 
 async function runExport() {
   const which = document.querySelector('input[name=which]:checked').value;
   const size = +document.querySelector('input[name=size]:checked').value;
   const quality = +$('q').value / 100;
-  let suffix = document.querySelector('input[name=nm]:checked').value === 'suffix' ? '-editada' : '';
+  const nmMode = document.querySelector('input[name=nm]:checked').value;
+  let suffix = nmMode === 'suffix' ? '-editada' : '';
   const list = state.photos.filter((p) => which === 'all' || (which === 'sel' ? state.sel.has(p.i) : isEdited(p.s)));
   if (!list.length) return;
+  const seqBase = $('seq-base').value, seqStart = Math.max(0, Math.floor(+$('seq-start').value || 0));
+  const seq = nmMode === 'seq' ? seqNames(seqBase, seqStart, list.length) : null;
+  try { localStorage.setItem('revelado-export-names', JSON.stringify({ mode: nmMode, base: seqBase, start: seqStart })); } catch { /* nada */ }
   let outDir = null;
   if (window.showDirectoryPicker) {
     try { outDir = await window.showDirectoryPicker({ id: 'revelado-export', mode: 'readwrite', startIn: 'pictures' }); }
     catch { return; }
-    if (state.dir && await outDir.isSameEntry(state.dir) && !suffix) {
+    if (state.dir && await outDir.isSameEntry(state.dir) && !suffix && !seq) {
       suffix = '-editada';
       toast('Elegiste la misma carpeta de las originales: las nuevas se guardan con "-editada" para no pisarlas.', 5000);
     }
@@ -1346,7 +1382,7 @@ async function runExport() {
     setTimeout(() => URL.revokeObjectURL(url), 60000);
     zip = [];
   };
-  for (const p of list) {
+  for (const [idx, p] of list.entries()) {
     if (cancelExport) break;
     try {
       let bmp = await createImageBitmap(p.file, { imageOrientation: 'from-image' });
@@ -1363,7 +1399,7 @@ async function runExport() {
       let blob = await new Promise((res) => canvas.toBlob(res, 'image/jpeg', quality));
       if (!blob) throw new Error('sin imagen');
       blob = await withExif(p.file, blob);
-       const base = p.name.replace(/\.(png|webp|jpe?g)$/i, '') + suffix;
+       const base = seq ? seq[idx].slice(0, -4) : p.name.replace(/\.(png|webp|jpe?g)$/i, '') + suffix;
        let name = `${base}.jpg`, n = 2;
        while (usedNames.has(name)) name = `${base}-${n++}.jpg`;
        if (outDir) {

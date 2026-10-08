@@ -80,6 +80,9 @@ export async function withExif(originalFile, jpegBlob) {
       const tag = le ? seg[e] | (seg[e+1] << 8) : (seg[e] << 8) | seg[e+1];
       if (tag === 0x0112) { if (le) { seg[e+8] = 1; seg[e+9] = 0; } else { seg[e+8] = 0; seg[e+9] = 1; } }
     }
+    // Se desengancha la miniatura vieja (IFD1): mostraba la foto sin editar ni recortar en algunos visores.
+    const nx = 10 + ifd0 + 2 + n0*12;
+    if (nx + 4 <= seg.length) seg.fill(0, nx, nx + 4);
     const out = new Uint8Array(await jpegBlob.slice(0, 64).arrayBuffer());
     // Insertar después del APP0 (JFIF) si existe; si no, después del inicio del archivo.
     let at = 2;
