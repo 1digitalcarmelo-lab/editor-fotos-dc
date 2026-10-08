@@ -1,5 +1,5 @@
 // Revelado DC · editor de fotos por lote que corre en el navegador.
-import { Engine, DEFAULTS, freshSettings, frameSize, outSize, fitPan, ensurePan } from './engine.js';
+import { Engine, DEFAULTS, freshSettings, frameSize, outSize, fitPan, fitPanGrow, ensurePan } from './engine.js';
 import { readExif, withExif, orientationCss } from './exif.js';
 import * as store from './store.js';
 import { EYES_VERSION, faceState, closedCount, applyEyePatches } from './eyes.js';
@@ -523,9 +523,10 @@ async function selectPhoto(i, resetSel = true) {
   try {
     const bmp = await getPreview(p);
     if (token !== state.loadToken) return;
+    dropHiRes();
     previewBitmap = bmp; state.loadedKey = previewKey(p);
     engine.setImage(bmp);
-    draw();
+    draw(); if (state.zoom > 1.4) updateHiRes();
   } catch (e) {
     console.error(e);
     toast('No se pudo abrir ' + p.name);
@@ -554,11 +555,14 @@ function drawNow() {
   const [ow, oh] = outSize(p.s, engine.w, engine.h, state.cropMode);
   const fit = Math.min((vp.clientWidth - 24) * dpr / ow, (vp.clientHeight - 24) * dpr / oh, 1);
   const k = fit * state.zoom;
-  const w = Math.max(1, Math.round(ow*k)), h = Math.max(1, Math.round(oh*k));
+  const cssW = ow * k / dpr, cssH = oh * k / dpr;
+  // con mucho zoom el lienzo se limita a ~20 MP (y al máximo de la placa) para no agotar la memoria
+  const lim = Math.min(1, Math.sqrt(20e6 / (ow * k * oh * k)), engine.maxTex / Math.max(ow * k, oh * k));
+  const w = Math.max(1, Math.round(ow*k*lim)), h = Math.max(1, Math.round(oh*k*lim));
   engine.render(state.previewS || p.s, w, h, { before: state.before, ignoreCrop: state.cropMode });
   const cv = $('view');
-  cv.style.width = (w / dpr) + 'px'; cv.style.height = (h / dpr) + 'px';
-  cv.style.transform = `translate(${state.panX}px, ${state.panY}px)`;
+  cv.style.width = cssW + 'px'; cv.style.height = cssH + 'px';
+  cv.style.transform = `translate(-50%, -50%) translate(${state.panX}px, ${state.panY}px)`;
   renderMaskOverlay();
   renderEyesOverlay();
   $('zoom-label').textContent = `${Math.round(state.zoom * 100)}%`;
@@ -591,20 +595,61 @@ function drawHisto() {
 }
 window.addEventListener('resize', draw);
 let panDrag = null;
+// Zoom de inspección: acerca hacia donde está el mouse, sin deformar. Al acercar se usa la foto en
+// resolución completa (para ver de verdad si algo está fuera de foco); al volver a 100 % se libera.
+const ZOOM_MAX = 6;
+function setZoom(z, mx, my) {
+  const vp = $('viewport').getBoundingClientRect();
+  const old = state.zoom; z = Math.max(.25, Math.min(ZOOM_MAX, +z.toFixed(3)));
+  if (z === old) return;
+  if (mx === undefined) { mx = vp.left + vp.width / 2; my = vp.top + vp.height / 2; }
+  const r = z / old, ox = mx - (vp.left + vp.width / 2), oy = my - (vp.top + vp.height / 2);
+  state.zoom = z;
+  if (z <= 1) { state.panX = 0; state.panY = 0; }
+  else { state.panX = ox - (ox - state.panX) * r; state.panY = oy - (oy - state.panY) * r; }
+  updateHiRes(); draw();
+}
+let hiResToken = 0;
+async function updateHiRes() {
+  const p = cur(); if (!p || !previewBitmap) return;
+  const want = state.zoom > 1.4 && Math.max(p.w || 0, p.h || 0) > Math.max(previewBitmap.width, previewBitmap.height) * 1.05;
+  if (want === !!state.hiRes) return;
+  const token = ++hiResToken;
+  if (!want) { state.hiRes = null; engine.setImage(previewBitmap); draw(); return; }
+  $('loading').hidden = false;
+  try {
+    let full = await sourceBitmap(p);
+    if (Math.max(full.width, full.height) > engine.maxTex) {
+      const k = engine.maxTex / Math.max(full.width, full.height);
+      const b2 = await createImageBitmap(full, { resizeWidth: Math.floor(full.width * k), resizeHeight: Math.floor(full.height * k), resizeQuality: 'high' });
+      full.close(); full = b2;
+    }
+    if (token !== hiResToken || cur() !== p || state.zoom <= 1.4) { full.close(); return; }
+    state.hiRes = full; engine.setImage(full); draw();
+  } catch (e) { console.warn('alta resolución', e); } finally { $('loading').hidden = true; }
+}
+function dropHiRes() { hiResToken++; if (state.hiRes) { state.hiRes.close?.(); state.hiRes = null; } }
 $('viewport').addEventListener('wheel', (e) => {
   if (state.cropMode) return; e.preventDefault();
-  state.zoom = Math.max(.25, Math.min(4, +(state.zoom * (e.deltaY < 0 ? 1.1 : .9)).toFixed(2))); draw();
+  setZoom(state.zoom * (e.deltaY < 0 ? 1.15 : 1 / 1.15), e.clientX, e.clientY);
 }, { passive: false });
 // Mover la foto dentro de su encuadre (reencuadre). Si no queda foto de ese lado, se amplía lo justo
 // («Ampliar encuadre») para que la foto siga al mouse; bajando ese deslizador se achica de nuevo.
-function reframeTo(s, target, drag) {
-  // Solo mueve la foto: nunca la agranda sola. Se frena donde aparecería un borde vacío.
+function reframeTo(s, target, drag, free = false) {
   const from = s.pan || { x: 0, y: 0 };
+  if (free) {
+    // Shift + arrastrar: la foto va adonde la lleves; se amplía solo lo justo para no dejar bordes vacíos
+    if (fitPanGrow(s, engine.w, engine.h, target, from) && sliderEls.fill) {
+      sliderEls.fill.input.value = s.fill; sliderEls.fill.out.textContent = sliderEls.fill.fmt(s.fill); sliderEls.fill.wrap.classList.add('changed');
+    }
+    return;
+  }
+  // Arrastrar común: solo mueve la foto, nunca la agranda. Se frena donde aparecería un borde vacío.
   const got = fitPan(s, engine.w, engine.h, target, from);
   const want = Math.hypot(target.x - from.x, target.y - from.y), moved = Math.hypot(got.x - from.x, got.y - from.y);
   if (drag && !drag.hinted && want > .01 && moved < want * .2) {
     drag.hinted = true;
-    toast('No queda más foto de ese lado. Para tener margen, subí un poquito «Ampliar encuadre» (Recorte y enderezado). Doble clic en la foto la deja como estaba.', 6500);
+    toast('No queda más foto de ese lado. Para moverla igual, arrastrala con Shift apretado (se amplía lo justo). «↺ Encuadre» o doble clic la dejan como estaba.', 7000);
   }
 }
 let frameDrag = null;
@@ -626,10 +671,11 @@ $('viewport').addEventListener('pointermove', (e) => {
     const dx = e.clientX - frameDrag.x, dy = e.clientY - frameDrag.y;
     if (!frameDrag.moved && Math.hypot(dx, dy) < 4) return;
     if (!frameDrag.moved) { frameDrag.moved = true; beginChange(); $('viewport').classList.add('reframing'); }
-    reframeTo(cur().s, { x: frameDrag.p0.x + dx * frameDrag.kx, y: frameDrag.p0.y + dy * frameDrag.ky }, frameDrag);
+    reframeTo(cur().s, { x: frameDrag.p0.x + dx * frameDrag.kx, y: frameDrag.p0.y + dy * frameDrag.ky }, frameDrag, e.shiftKey);
     draw(); return;
   }
-  if (!panDrag) return; state.panX = panDrag.px + e.clientX - panDrag.x; state.panY = panDrag.py + e.clientY - panDrag.y; draw();
+  if (!panDrag) return; state.panX = panDrag.px + e.clientX - panDrag.x; state.panY = panDrag.py + e.clientY - panDrag.y;
+  $('view').style.transform = `translate(-50%, -50%) translate(${state.panX}px, ${state.panY}px)`; renderMaskOverlay(); renderEyesOverlay();
 });
 function endFrameDrag(e) {
   if (!frameDrag || (e && e.pointerId !== frameDrag.id)) return;
@@ -1383,7 +1429,7 @@ function placeCrop() {
     drag.moved = true;
     if (drag.h === 'pan') {
       // la foto sigue al mouse; se frena sola donde aparecería un borde negro
-      reframeTo(s, { x: drag.p0.x + dx, y: drag.p0.y + dy }, drag);
+      reframeTo(s, { x: drag.p0.x + dx, y: drag.p0.y + dy }, drag, e.shiftKey);
       draw(); return;
     }
     if (drag.h === 'move') {
@@ -1783,9 +1829,9 @@ $('btn-auto-batch').addEventListener('click', autoBatch);
 $('btn-reset').addEventListener('click', () => change((s) => { Object.assign(s, freshSettings()); }));
 $('btn-undo').addEventListener('click', undo);
 $('btn-redo').addEventListener('click', redo);
-$('btn-zoom-in').addEventListener('click', () => { state.zoom = Math.min(4, +(state.zoom * 1.25).toFixed(2)); draw(); });
-$('btn-zoom-out').addEventListener('click', () => { state.zoom = Math.max(.25, +(state.zoom / 1.25).toFixed(2)); draw(); });
-$('btn-zoom-fit').addEventListener('click', () => { state.zoom = 1; state.panX = 0; state.panY = 0; draw(); });
+$('btn-zoom-in').addEventListener('click', () => setZoom(state.zoom * 1.25));
+$('btn-zoom-out').addEventListener('click', () => setZoom(state.zoom / 1.25));
+$('btn-zoom-fit').addEventListener('click', () => setZoom(1));
 $('btn-duplicate').addEventListener('click', () => {
   const p = cur(); if (!p) return;
   const copy = { ...p, i: state.photos.length, name: p.name.replace(/(\.[^.]+)$/, '-copia$1'), key: `${p.key}|copy|${Date.now()}`, dup: true, s: structuredClone(p.s), hist: [], thumbBusy: false };
