@@ -25,6 +25,7 @@ precision highp float;
 in vec2 vUv; out vec4 o;
 uniform sampler2D uSrc, uBlur;
 uniform mat3 uM;
+uniform vec3 uPers; // perspectiva: horizontal, vertical y compensación de escala (para no dejar bordes vacíos)
 uniform vec2 uTexel;
 uniform float uExp,uCon,uHi,uSh,uWh,uBl,uTemp,uTint,uVib,uSat,uCla,uVig,uSharp,uBW,uAspect,uDehaze,uNoise,uDistortion,uFisheye,uFade;
 uniform vec4 uSplit; // virado: tono y cantidad en sombras (x,y) y en luces (z,w)
@@ -43,7 +44,11 @@ vec3 base(vec3 srgb){
 }
 float levels(float L){ float b0 = -uBl*0.10; float w0 = 1. - uWh*0.15; return (L-b0)/(w0-b0); }
 void main(){
-  vec2 uv = (uM * vec3(vUv,1.)).xy;
+  // Perspectiva (como «Transformar» de Lightroom): un lado se acerca y el otro se aleja.
+  vec2 po = (vUv - .5) / uPers.z;
+  po.y *= 1. - uPers.x * .7 * po.x;   // horizontal: + agranda el lado derecho
+  po.x *= 1. + uPers.y * .7 * po.y;   // vertical: + agranda la parte de arriba (corrige líneas que convergen)
+  vec2 uv = (uM * vec3(po + .5, 1.)).xy;
   vec2 dc = uv * 2. - 1.;
   float rr = dot(dc, dc);
   dc *= 1. + uDistortion * rr;
@@ -153,7 +158,7 @@ export const DEFAULTS = Object.freeze({
   dehaze: 0, noise: 0, distortion: 0, fisheye: 0, redEyes: [],
   fade: 0, shH: 0, shS: 0, hiH: 0, hiS: 0,
   rot: 0, ang: 0, crop: { x: 0, y: 0, w: 1, h: 1 }, aspect: 'libre', masks: [],
-  pan: { x: 0, y: 0 }, fill: 0,
+  pan: { x: 0, y: 0 }, fill: 0, persH: 0, persV: 0,
   preset: null, // { id, name, sig }: qué preset se aplicó y cómo quedaron los ajustes en ese momento
 });
 
@@ -385,6 +390,11 @@ export class Engine {
     gl.uniform1f(u.uNoise, (z.noise || 0) / 100);
     gl.uniform1f(u.uDistortion, (z.distortion || 0) / 100);
     gl.uniform1f(u.uFisheye, (z.fisheye || 0) / 100);
+    { // la escala justa para que los bordes no queden vacíos: ks² - ks - |p|·0.35 ≥ 0
+      const ph = (s.persH || 0) / 100, pv = (s.persV || 0) / 100; // es geometría: se mantiene también en «Antes»
+      const need = (a) => (1 + Math.sqrt(1 + 4 * Math.abs(a) * .35)) / 2;
+      gl.uniform3f(u.uPers, ph, pv, Math.max(need(ph), need(pv)));
+    }
     const eyes = Array.isArray(z.redEyes) ? z.redEyes.slice(0, 16) : [];
     for (let i = 0; i < 16; i++) {
       const eye = eyes[i] || {};

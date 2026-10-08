@@ -1,5 +1,5 @@
 // Revelado DC · editor de fotos por lote que corre en el navegador.
-import { Engine, DEFAULTS, freshSettings, frameSize, outSize, fitPan, fitPanGrow, ensurePan } from './engine.js';
+import { Engine, DEFAULTS, freshSettings, frameSize, outSize, fitPan, ensurePan } from './engine.js';
 import { readExif, withExif, orientationCss } from './exif.js';
 import * as store from './store.js';
 
@@ -7,7 +7,7 @@ const $ = (id) => document.getElementById(id);
 const PREVIEW_MAX = 2560;
 const EXTS = /\.(jpe?g|png|webp)$/i;
 const TONE_KEYS = ['exp', 'con', 'hi', 'sh', 'wh', 'bl', 'temp', 'tint', 'vib', 'sat', 'cla', 'sharp', 'vig', 'dehaze', 'noise', 'distortion', 'fisheye', 'bw', 'fade', 'shH', 'shS', 'hiH', 'hiS'];
-const GEO_KEYS = ['rot', 'ang', 'crop', 'aspect', 'aspectV', 'pan', 'fill'];
+const GEO_KEYS = ['rot', 'ang', 'crop', 'aspect', 'aspectV', 'pan', 'fill', 'persH', 'persV'];
 
 const SLIDERS = {
   'sl-luz': [
@@ -47,6 +47,8 @@ const SLIDERS = {
   'sl-crop': [
     { k: 'ang', label: 'Enderezar', min: -20, max: 20, step: 0.1, fmt: (v) => v.toFixed(1) + '°' },
     { k: 'fill', label: 'Ampliar encuadre', min: 0, max: 100, step: 1, fmt: (v) => (v > 0 ? '+' : '') + Math.round(v) + '%' },
+    { k: 'persH', label: 'Perspectiva horizontal', min: -100, max: 100 },
+    { k: 'persV', label: 'Perspectiva vertical', min: -100, max: 100 },
   ],
 };
 
@@ -125,7 +127,7 @@ const cur = () => state.photos[state.cur];
 const keyOf = (f) => `${f.name}|${f.size}|${f.lastModified}`;
 const naturalSort = (a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
 function isEdited(s) {
-  return TONE_KEYS.some((k) => (s[k] || 0) !== (DEFAULTS[k] || 0)) || s.rot || s.ang || s.fill || s.pan?.x || s.pan?.y
+  return TONE_KEYS.some((k) => (s[k] || 0) !== (DEFAULTS[k] || 0)) || s.rot || s.ang || s.fill || s.pan?.x || s.pan?.y || s.persH || s.persV
     || s.crop.x || s.crop.y || s.crop.w !== 1 || s.crop.h !== 1 || (s.masks?.length > 0) || (s.redEyes?.length > 0);
 }
 function pick(s, keys) { const o = {}; for (const k of keys) o[k] = structuredClone(s[k]); return o; }
@@ -580,10 +582,13 @@ $('viewport').addEventListener('wheel', (e) => {
 // Mover la foto dentro de su encuadre (reencuadre). Si no queda foto de ese lado, se amplía lo justo
 // («Ampliar encuadre») para que la foto siga al mouse; bajando ese deslizador se achica de nuevo.
 function reframeTo(s, target, drag) {
-  const grew = fitPanGrow(s, engine.w, engine.h, target, s.pan || { x: 0, y: 0 });
-  if (grew) {
-    if (sliderEls.fill) { sliderEls.fill.input.value = s.fill; sliderEls.fill.out.textContent = sliderEls.fill.fmt(s.fill); sliderEls.fill.wrap.classList.add('changed'); }
-    if (drag && !drag.hinted && !state.growTipShown) { drag.hinted = state.growTipShown = true; toast('Para poder mover la foto se amplió un poco («Ampliar encuadre»). Si querés, bajalo después.', 5000); }
+  // Solo mueve la foto: nunca la agranda sola. Se frena donde aparecería un borde vacío.
+  const from = s.pan || { x: 0, y: 0 };
+  const got = fitPan(s, engine.w, engine.h, target, from);
+  const want = Math.hypot(target.x - from.x, target.y - from.y), moved = Math.hypot(got.x - from.x, got.y - from.y);
+  if (drag && !drag.hinted && want > .01 && moved < want * .2) {
+    drag.hinted = true;
+    toast('No queda más foto de ese lado. Para tener margen, subí un poquito «Ampliar encuadre» (Recorte y enderezado). Doble clic en la foto la deja como estaba.', 6500);
   }
 }
 let frameDrag = null;
@@ -618,11 +623,18 @@ function endFrameDrag(e) {
 }
 $('viewport').addEventListener('pointerup', (e) => { panDrag = null; endFrameDrag(e); });
 $('viewport').addEventListener('pointercancel', (e) => { panDrag = null; endFrameDrag(e); });
-$('view').addEventListener('dblclick', () => { // doble clic en la foto: vuelve a centrarla
-  const p = cur(); if (!p || state.cropMode || state.redEyeMode || state.zoom > 1) return;
-  if (!p.s.pan?.x && !p.s.pan?.y) return;
-  change((s) => { s.pan = { x: 0, y: 0 }; });
+function resetFraming() {
+  const p = cur(); if (!p) return;
+  if (!p.s.pan?.x && !p.s.pan?.y && !p.s.fill) return;
+  change((s) => { s.pan = { x: 0, y: 0 }; s.fill = 0; });
+  toast('Encuadre original: foto centrada y sin ampliar');
+}
+$('viewport').addEventListener('dblclick', (e) => { // doble clic en la foto: vuelve al encuadre original
+  // (el arrastre captura el puntero en el visor, por eso se escucha acá y no en la foto)
+  if (state.cropMode || state.redEyeMode || state.zoom > 1 || e.target.closest('[data-drag], .mask-overlay *')) return;
+  resetFraming();
 });
+$('btn-frame-reset').addEventListener('click', resetFraming);
 
 // ---------------------------------------------------------------- deslizadores
 const sliderEls = {};
@@ -1327,7 +1339,7 @@ function placeCrop() {
   box.addEventListener('pointerup', end); box.addEventListener('pointercancel', end);
   box.addEventListener('dblclick', (e) => { // doble clic adentro: foto centrada otra vez
     if (e.target.dataset.h) return; const p = cur(); if (!p) return;
-    p.s.pan = { x: 0, y: 0 }; draw(); save(p);
+    p.s.pan = { x: 0, y: 0 }; p.s.fill = 0; syncSliders(); draw(); save(p);
   });
 })();
 
