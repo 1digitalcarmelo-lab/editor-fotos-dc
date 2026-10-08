@@ -1,5 +1,5 @@
 // Revelado DC · editor de fotos por lote que corre en el navegador.
-import { Engine, DEFAULTS, freshSettings, frameSize, outSize, fitPan, ensurePan } from './engine.js';
+import { Engine, DEFAULTS, freshSettings, frameSize, outSize, fitPan, fitPanGrow, ensurePan } from './engine.js';
 import { readExif, withExif, orientationCss } from './exif.js';
 import * as store from './store.js';
 
@@ -46,7 +46,7 @@ const SLIDERS = {
   ],
   'sl-crop': [
     { k: 'ang', label: 'Enderezar', min: -20, max: 20, step: 0.1, fmt: (v) => v.toFixed(1) + '°' },
-    { k: 'fill', label: 'Ampliar encuadre', min: 0, max: 60, step: 1, fmt: (v) => (v > 0 ? '+' : '') + Math.round(v) + '%' },
+    { k: 'fill', label: 'Ampliar encuadre', min: 0, max: 100, step: 1, fmt: (v) => (v > 0 ? '+' : '') + Math.round(v) + '%' },
   ],
 };
 
@@ -70,6 +70,9 @@ const BUILTIN_PRESETS = [
   P('Eventos', 'flash-evento', 'Flash evento', { exp: -0.1, temp: 6, con: 8, hi: -24, sh: 6, wh: -6, bl: -4, vib: 6, sat: -6, vig: -14, sharp: 6 }),
   P('Eventos', 'iglesia', 'Iglesia / Civil', { exp: 0.2, temp: -6, con: 6, hi: -14, sh: 16, vib: 6, sat: -6, cla: 4, noise: 15, sharp: 8 }),
   P('Eventos', 'exterior', 'Exterior de día', { con: 8, hi: -20, sh: 10, wh: 4, bl: -4, vib: 14, dehaze: 8, cla: 6, sharp: 12 }),
+  P('Eventos', 'humo-suave', 'Salón con humo · suave', { con: 8, hi: -8, bl: -8, vib: 8, cla: 8, dehaze: 28, noise: 20, sharp: 8 }),
+  P('Eventos', 'humo-fuerte', 'Salón con mucho humo', { exp: 0.1, con: 12, hi: -14, sh: 6, bl: -14, vib: 12, sat: -4, cla: 14, dehaze: 55, noise: 30, sharp: 10 }),
+  P('Eventos', 'carioca', 'Carioca · colores que saltan', { con: 16, hi: -10, sh: 6, bl: -12, vib: 42, sat: 14, cla: 10, dehaze: 10, vig: -10, noise: 15, sharp: 10 }),
   P('Eventos', 'fiesta', 'Fiesta', { exp: 0.15, con: 14, hi: -10, sh: 10, bl: -8, vib: 22, sat: 6, cla: 8, vig: -10, noise: 15, sharp: 8 }),
 
   P('Color', 'vivo', 'Vivo', { con: 14, hi: -6, sh: 4, bl: -6, vib: 30, sat: 10, cla: 8, sharp: 12 }),
@@ -574,15 +577,52 @@ $('viewport').addEventListener('wheel', (e) => {
   if (state.cropMode) return; e.preventDefault();
   state.zoom = Math.max(.25, Math.min(4, +(state.zoom * (e.deltaY < 0 ? 1.1 : .9)).toFixed(2))); draw();
 }, { passive: false });
+// Mover la foto dentro de su encuadre (reencuadre). Si no queda foto de ese lado, se amplía lo justo
+// («Ampliar encuadre») para que la foto siga al mouse; bajando ese deslizador se achica de nuevo.
+function reframeTo(s, target, drag) {
+  const grew = fitPanGrow(s, engine.w, engine.h, target, s.pan || { x: 0, y: 0 });
+  if (grew) {
+    if (sliderEls.fill) { sliderEls.fill.input.value = s.fill; sliderEls.fill.out.textContent = sliderEls.fill.fmt(s.fill); sliderEls.fill.wrap.classList.add('changed'); }
+    if (drag && !drag.hinted && !state.growTipShown) { drag.hinted = state.growTipShown = true; toast('Para poder mover la foto se amplió un poco («Ampliar encuadre»). Si querés, bajalo después.', 5000); }
+  }
+}
+let frameDrag = null;
 $('viewport').addEventListener('pointerdown', (e) => {
-  if (state.cropMode || state.zoom <= 1 || maskDrag || e.target.closest('[data-drag]')) return;
+  if (maskDrag || e.target.closest('[data-drag]') || e.button > 0) return;
+  const p = cur(); if (!p || !previewBitmap) return;
+  if (!state.cropMode && state.zoom <= 1 && !state.redEyeMode && !state.before && e.target.id === 'view') {
+    // tocar la foto: un clic suelta la máscara elegida; arrastrar mueve la foto dentro del encuadre
+    const r = $('view').getBoundingClientRect();
+    frameDrag = { id: e.pointerId, x: e.clientX, y: e.clientY, p0: { ...(p.s.pan || { x: 0, y: 0 }) }, kx: p.s.crop.w / r.width, ky: p.s.crop.h / r.height, moved: false };
+    e.currentTarget.setPointerCapture(e.pointerId); e.preventDefault();
+    return;
+  }
+  if (state.cropMode || state.zoom <= 1) return;
   panDrag = { x: e.clientX, y: e.clientY, px: state.panX, py: state.panY }; e.currentTarget.setPointerCapture(e.pointerId);
 });
 $('viewport').addEventListener('pointermove', (e) => {
+  if (frameDrag && e.pointerId === frameDrag.id) {
+    const dx = e.clientX - frameDrag.x, dy = e.clientY - frameDrag.y;
+    if (!frameDrag.moved && Math.hypot(dx, dy) < 4) return;
+    if (!frameDrag.moved) { frameDrag.moved = true; beginChange(); $('viewport').classList.add('reframing'); }
+    reframeTo(cur().s, { x: frameDrag.p0.x + dx * frameDrag.kx, y: frameDrag.p0.y + dy * frameDrag.ky }, frameDrag);
+    draw(); return;
+  }
   if (!panDrag) return; state.panX = panDrag.px + e.clientX - panDrag.x; state.panY = panDrag.py + e.clientY - panDrag.y; draw();
 });
-$('viewport').addEventListener('pointerup', () => { panDrag = null; });
-$('viewport').addEventListener('pointercancel', () => { panDrag = null; });
+function endFrameDrag(e) {
+  if (!frameDrag || (e && e.pointerId !== frameDrag.id)) return;
+  const moved = frameDrag.moved; frameDrag = null; $('viewport').classList.remove('reframing');
+  if (moved) { commit(); syncSliders(); }
+  else if (state.selectedMask >= 0) { state.selectedMask = -1; renderMasks(); } // clic en la foto = soltar la máscara
+}
+$('viewport').addEventListener('pointerup', (e) => { panDrag = null; endFrameDrag(e); });
+$('viewport').addEventListener('pointercancel', (e) => { panDrag = null; endFrameDrag(e); });
+$('view').addEventListener('dblclick', () => { // doble clic en la foto: vuelve a centrarla
+  const p = cur(); if (!p || state.cropMode || state.redEyeMode || state.zoom > 1) return;
+  if (!p.s.pan?.x && !p.s.pan?.y) return;
+  change((s) => { s.pan = { x: 0, y: 0 }; });
+});
 
 // ---------------------------------------------------------------- deslizadores
 const sliderEls = {};
@@ -652,6 +692,7 @@ function renderMasks() {
     b.onclick = () => { state.selectedMask = i; renderMasks(); }; list.appendChild(b);
   });
   $('btn-mask-delete').disabled = state.selectedMask < 0 || state.selectedMask >= masks.length;
+  $('btn-mask-done').hidden = $('btn-mask-delete').disabled;
   host.innerHTML = '';
   const m = masks[state.selectedMask]; if (!m) return;
   const add = (key, label, min, max, step) => {
@@ -855,12 +896,16 @@ function addMask(kind) {
   if (p.s.masks.length >= 8) return toast('Podés usar hasta 8 máscaras por foto');
   p.hist.push(structuredClone(p.s));
   const f = maskFrame(), short = Math.min(f.w || 1, f.h || 1);
-  if (kind === 'linear') p.s.masks.push({ kind, x: .5, y: .5, w: .30, h: 0, rotation: 0, feather: 0, tone: {} });
-  else p.s.masks.push({ kind, x: .5, y: .5, w: f.w ? .22 * short / f.w : .22, h: f.h ? .22 * short / f.h : .22, rotation: 0, feather: .35, lockCircle: false, tone: {} });
+  // cada máscara nueva aparece en un lugar libre, no encima de otra (si no, parece que no pasó nada)
+  const spots = [[.5, .5], [.32, .38], [.68, .38], [.32, .66], [.68, .66], [.5, .3], [.5, .72], [.2, .5], [.8, .5]];
+  const [x, y] = spots.find(([sx, sy]) => !p.s.masks.some((m) => Math.hypot(m.x - sx, m.y - sy) < .1)) || [.5, .5];
+  if (kind === 'linear') p.s.masks.push({ kind, x, y, w: .30, h: 0, rotation: 0, feather: 0, tone: {} });
+  else p.s.masks.push({ kind, x, y, w: f.w ? .2 * short / f.w : .2, h: f.h ? .2 * short / f.h : .2, rotation: 0, feather: .35, lockCircle: false, tone: {} });
   state.selectedMask = p.s.masks.length - 1; renderMasks(); draw(); save(p); refreshStrip();
 }
 $('btn-mask-radial').addEventListener('click', () => addMask('radial'));
 $('btn-mask-linear').addEventListener('click', () => addMask('linear'));
+$('btn-mask-done').addEventListener('click', () => { state.selectedMask = -1; renderMasks(); toast('Máscara lista. Para volver a editarla tocá su punto en la foto o su número acá.'); });
 $('btn-mask-delete').addEventListener('click', () => { const p = cur(); if (!p || state.selectedMask < 0) return; p.hist.push(structuredClone(p.s)); p.s.masks.splice(state.selectedMask, 1); state.selectedMask = Math.min(state.selectedMask, p.s.masks.length - 1); renderMasks(); draw(); save(p); refreshStrip(); });
 
 // Historial (deshacer) y guardado
@@ -1053,14 +1098,18 @@ function updatePresetSelect() {
   if (st.kind === 'exact' && sel.querySelector(`option[value="${CSS.escape(st.id)}"]`)) {
     custom.hidden = true; sel.value = st.id;
   } else if (st.kind !== 'none') {
-    custom.hidden = false; custom.textContent = `${st.name} · modificado`; sel.value = '__custom';
+    custom.hidden = false; custom.textContent = st.kind === 'exact' ? st.name : `${st.name} · modificado`; sel.value = '__custom';
   } else { custom.hidden = true; sel.value = ''; }
   sel.classList.toggle('custom', st.kind === 'custom');
   sel.title = st.kind === 'none' ? 'Esta foto no tiene preset' : st.kind === 'exact' ? `Preset: ${st.name}` : `Preset ${st.name} con cambios manuales`;
   $('btn-preset-mix').disabled = !p;
+  $('btn-preset-mix').title = 'Activado: cada preset se suma encima del que ya tiene la foto';
   $('btn-del-preset').hidden = !(st.id && st.id.startsWith('u:'));
 }
 function presetFrom(v) { return presetById(v); }
+// Rangos de cada control, para que al combinar presets los valores no se pasen de lo que permite el deslizador
+const KEY_RANGE = (() => { const r = {}; for (const list of Object.values(SLIDERS)) for (const d of list) r[d.k] = [d.min ?? -100, d.max ?? 100]; return r; })();
+state.mixMode = false;
 $('preset-select').addEventListener('change', (e) => {
   const v = e.target.value; e.target.blur();
   if (!v || v === '__custom') {
@@ -1068,6 +1117,22 @@ $('preset-select').addEventListener('change', (e) => {
     updatePresetSelect(); return;
   }
   const pr = presetFrom(v); if (!pr) return updatePresetSelect();
+  const before = presetStatus(cur()?.s);
+  if (state.mixMode && before.kind !== 'none') {
+    // Combinar: el preset se SUMA a lo que ya tiene la foto (uno encima del otro)
+    change((s) => {
+      for (const [k, val] of Object.entries(pr.s)) {
+        if (k === 'bw') { s.bw = s.bw || val; continue; }
+        if (k === 'shH' || k === 'hiH') { if ((k === 'shH' ? pr.s.shS : pr.s.hiS) > (k === 'shH' ? s.shS : s.hiS) / 2) s[k] = val; continue; }
+        const [lo, hi] = KEY_RANGE[k] || [-100, 100];
+        s[k] = Math.max(lo, Math.min(hi, +((s[k] || 0) + val).toFixed(2)));
+      }
+      const name = `${before.name} + ${pr.name}`;
+      s.preset = { id: 'mix:' + Date.now().toString(36), name: name.length > 60 ? name.slice(0, 57) + '…' : name, sig: toneSig(s) };
+    });
+    toast(`Sumado "${pr.name}" encima de lo que ya tenía la foto`);
+    return;
+  }
   // no destructivo: el preset solo mueve los mismos controles de siempre; se pueden seguir tocando
   change((s) => {
     for (const k of TONE_KEYS) s[k] = structuredClone(DEFAULTS[k]);
@@ -1077,17 +1142,11 @@ $('preset-select').addEventListener('change', (e) => {
   toast(`Preset "${pr.name}" aplicado. Para usarlo en varias: seleccionalas y tocá Sincronizar.`, 3600);
 });
 $('btn-preset-mix').addEventListener('click', () => {
-  // elegí un preset de la lista para combinarlo con lo que ya tiene la foto
-  const p = cur(); if (!p) return;
-  const opts = [...BUILTIN_PRESETS, ...state.presets];
-  modal(`<h2>Combinar con un preset</h2><p class="muted">Suma los ajustes del preset a los que ya tiene esta foto (los que el preset no toca quedan como están).</p>
-    <div class="opts"><select id="mix-select">${opts.map((o) => `<option value="${o.id}">${escapeHtml((o.cat ? o.cat + ' · ' : 'Mis presets · ') + o.name)}</option>`).join('')}</select></div>
-    <div class="modal-actions"><button class="btn ghost" data-close>Cancelar</button><button class="btn gold" id="mix-ok">Combinar</button></div>`);
-  $('mix-ok').onclick = () => {
-    const pr = presetById($('mix-select').value); closeModal(); if (!pr) return;
-    change((s) => { Object.assign(s, structuredClone(pr.s)); s.preset = { id: pr.id, name: pr.name, sig: null }; });
-    toast(`Preset "${pr.name}" combinado con los ajustes actuales`);
-  };
+  state.mixMode = !state.mixMode;
+  $('btn-preset-mix').classList.toggle('on', state.mixMode);
+  $('btn-preset-mix').textContent = state.mixMode ? '✓ Combinando' : '＋ Combinar';
+  toast(state.mixMode ? 'Combinar activado: cada preset que elijas se suma encima del anterior. Tocá de nuevo para volver a reemplazar.'
+    : 'Combinar desactivado: cada preset reemplaza al anterior.', 5000);
 });
 $('btn-save-preset').addEventListener('click', () => {
   const p = cur(); if (!p) return;
@@ -1225,12 +1284,7 @@ function placeCrop() {
     drag.moved = true;
     if (drag.h === 'pan') {
       // la foto sigue al mouse; se frena sola donde aparecería un borde negro
-      const got = fitPan(s, engine.w, engine.h, { x: drag.p0.x + dx, y: drag.p0.y + dy }, drag.p0);
-      const want = Math.hypot(dx, dy), moved = Math.hypot(got.x - drag.p0.x, got.y - drag.p0.y);
-      if (want > .04 && moved < want * .15 && !drag.hinted) {
-        drag.hinted = true;
-        toast('No queda foto de ese lado para mover. Achicá el recorte o subí «Ampliar encuadre» para tener margen.', 5000);
-      }
+      reframeTo(s, { x: drag.p0.x + dx, y: drag.p0.y + dy }, drag);
       draw(); return;
     }
     if (drag.h === 'move') {
@@ -1535,7 +1589,7 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault();
     const st = e.shiftKey ? .02 : .004, d = { ArrowLeft: [-st, 0], ArrowRight: [st, 0], ArrowUp: [0, -st], ArrowDown: [0, st] }[e.key];
     const p0 = { ...(p.s.pan || { x: 0, y: 0 }) };
-    fitPan(p.s, engine.w, engine.h, { x: p0.x + d[0], y: p0.y + d[1] }, p0); draw(); save(p);
+    reframeTo(p.s, { x: p0.x + d[0], y: p0.y + d[1] }, {}); draw(); save(p);
     return;
   }
   if (e.key === 'ArrowRight') { e.preventDefault(); selectPhoto(state.cur + 1); }
@@ -1547,6 +1601,7 @@ document.addEventListener('keydown', (e) => {
   else if (mod && e.key.toLowerCase() === 'a') { e.preventDefault(); $('btn-sel-all').click(); }
   else if (!mod && e.key.toLowerCase() === 'r') { state.cropMode ? exitCrop() : enterCrop(); }
   else if (e.key === 'Escape' && state.cropMode) exitCrop();
+  else if (e.key === 'Escape' && state.selectedMask >= 0) { state.selectedMask = -1; renderMasks(); }
 });
 
 function escapeHtml(s) { return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }

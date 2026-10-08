@@ -209,6 +209,20 @@ export function fitPan(s, srcW, srcH, target, from = { x: 0, y: 0 }) {
   return s.pan;
 }
 
+/** Como fitPan, pero si no queda foto de ese lado agranda «Ampliar encuadre» (s.fill) lo justo para poder
+ *  moverla hasta donde pidió la persona (tope 100 %). Devuelve true si tuvo que ampliar. */
+export function fitPanGrow(s, srcW, srcH, target, from) {
+  const got = fitPan(s, srcW, srcH, target, from);
+  if (Math.abs(got.x - target.x) < 1e-4 && Math.abs(got.y - target.y) < 1e-4) return false;
+  const f0 = s.fill || 0, ok = (f) => { s.fill = f; s.pan = { ...target }; return geomValid(s, srcW, srcH); };
+  if (!ok(100)) { s.fill = 100; fitPan(s, srcW, srcH, target, got); return true; }
+  let lo = f0, hi = 100;
+  for (let i = 0; i < 18; i++) { const m = (lo + hi) / 2; if (ok(m)) hi = m; else lo = m; }
+  s.fill = Math.round(hi * 10) / 10; s.pan = { ...target };
+  if (!geomValid(s, srcW, srcH)) { s.fill = Math.min(100, Math.ceil(hi * 10) / 10 + 0.1); fitPan(s, srcW, srcH, target, got); }
+  return true;
+}
+
 /** Si un cambio de ángulo, recorte o ampliación dejó el desplazamiento fuera de la foto, lo corrige. */
 export function ensurePan(s, srcW, srcH) {
   if (!s.pan || (!s.pan.x && !s.pan.y)) return;
