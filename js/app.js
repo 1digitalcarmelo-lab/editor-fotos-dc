@@ -1274,7 +1274,7 @@ $('view').addEventListener('click', (e) => {
   if (!state.redEyeMode || state.cropMode) return;
   const p = cur(), r = e.currentTarget.getBoundingClientRect();
   if (!p || !r.width || !r.height) return;
-  const eye = { x: (e.clientX - r.left) / r.width, y: 1 - (e.clientY - r.top) / r.height, radius: .045 / state.zoom, strength: 1 };
+  const eye = { x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height /* el motor mide desde arriba */, radius: .045 / state.zoom, strength: 1 };
   change((s) => { if (!Array.isArray(s.redEyes)) s.redEyes = []; if (s.redEyes.length < 16) s.redEyes.push(eye); });
   toast('Punto de ojo rojo agregado');
 });
