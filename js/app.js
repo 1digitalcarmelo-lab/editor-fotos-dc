@@ -2,16 +2,8 @@
 import { Engine, DEFAULTS, freshSettings, frameSize, outSize } from './engine.js';
 import { readExif, withExif, orientationCss } from './exif.js';
 import * as store from './store.js';
-import { PRINCIPAL_LOGO, MOSCA_LOGO } from './branding.js';
 
 const $ = (id) => document.getElementById(id);
-// Usar los archivos estáticos del mismo deploy evita recortes y problemas de caché
-// de data-URLs gigantes en algunos navegadores.
-document.querySelectorAll('.brand-logo, .hero-logo').forEach((img) => {
-  img.src = `assets-logo-principal.png?v=4`;
-  img.style.objectFit = 'contain'; img.style.objectPosition = 'center';
-});
-document.querySelectorAll('link[rel="icon"], link[rel="apple-touch-icon"]').forEach((link) => { link.href = `icons/logo-mosca.png?v=4`; });
 const PREVIEW_MAX = 2560;
 const EXTS = /\.(jpe?g|png|webp)$/i;
 const TONE_KEYS = ['exp', 'con', 'hi', 'sh', 'wh', 'bl', 'temp', 'tint', 'vib', 'sat', 'cla', 'sharp', 'vig', 'dehaze', 'noise', 'distortion', 'fisheye', 'bw'];
