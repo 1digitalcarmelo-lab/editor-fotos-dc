@@ -44,11 +44,11 @@ const SLIDERS = {
 };
 
 const BUILTIN_PRESETS = [
-  { name: 'Natural', s: { con: 6, hi: -12, sh: 10, cla: 5, vib: 8, sharp: 10 } },
-  { name: 'Cálido evento', s: { temp: 10, con: 8, hi: -15, sh: 14, cla: 4, vib: 12, vig: -8, sharp: 10 } },
-  { name: 'Luminoso', s: { exp: 0.2, con: 4, hi: -18, sh: 20, wh: 6, vib: 8, sharp: 8 } },
-  { name: 'Salón oscuro', s: { exp: 0.35, con: 6, hi: -20, sh: 28, bl: -5, cla: 7, vib: 8, temp: -3, sharp: 10 } },
-  { name: 'Blanco y negro', s: { bw: true, con: 25, hi: -20, sh: 10, cla: 15, sharp: 15 } },
+  { id: 'dc:natural', name: 'Natural', s: { con: 6, hi: -12, sh: 10, cla: 5, vib: 8, sharp: 10 } },
+  { id: 'dc:calido-evento', name: 'Cálido evento', s: { temp: 10, con: 8, hi: -15, sh: 14, cla: 4, vib: 12, vig: -8, sharp: 10 } },
+  { id: 'dc:luminoso', name: 'Luminoso', s: { exp: 0.2, con: 4, hi: -18, sh: 20, wh: 6, vib: 8, sharp: 8 } },
+  { id: 'dc:salon-oscuro', name: 'Salón oscuro', s: { exp: 0.35, con: 6, hi: -20, sh: 28, bl: -5, cla: 7, vib: 8, temp: -3, sharp: 10 } },
+  { id: 'dc:bn', name: 'Blanco y negro', s: { bw: true, con: 25, hi: -20, sh: 10, cla: 15, sharp: 15 } },
 ];
 
 const state = {
@@ -552,6 +552,7 @@ function buildSliders() {
         const p = cur(); if (!p) return;
         p.s[d.k] = +input.value; out.textContent = fmt(+input.value);
         wrap.classList.toggle('changed', +input.value !== 0);
+        updatePresetSelect();
         draw();
       });
       input.addEventListener('change', commit);
@@ -576,6 +577,7 @@ function syncSliders() {
     el.wrap.classList.toggle('changed', v !== 0);
   }
   $('chk-bw').checked = !!p.s.bw;
+  updatePresetSelect();
   $('aspect-select').value = p.s.aspect === '7:5' ? 'p15x21' : (p.s.aspect || 'libre');
   if (!$('aspect-select').value) $('aspect-select').value = 'libre';
   renderMasks();
@@ -964,28 +966,73 @@ async function autoBatch() {
 // ---------------------------------------------------------------- presets
 async function loadPresets() {
   state.presets = (await store.get('presets')) || [];
+  // los presets propios viejos no tenían id: se les da uno estable (el índice cambia al borrar)
+  let fixed = false;
+  for (const pr of state.presets) if (!pr.id) { pr.id = 'u:' + Math.random().toString(36).slice(2, 10); fixed = true; }
+  if (fixed) store.set('presets', state.presets);
   renderPresets();
+}
+// ---- estado del preset POR FOTO (s.preset). El selector siempre muestra el de la foto que estás viendo.
+const toneSig = (s) => JSON.stringify(TONE_KEYS.map((k) => (typeof s[k] === 'number' ? Math.round(s[k] * 1000) / 1000 : !!s[k])));
+function presetById(id) {
+  if (!id) return null;
+  return BUILTIN_PRESETS.find((p) => p.id === id) || state.presets.find((p) => p.id === id) || null;
+}
+function presetStatus(s) {
+  if (!s?.preset?.id) return { kind: 'none' };
+  const exact = s.preset.sig && s.preset.sig === toneSig(s);
+  return { kind: exact ? 'exact' : 'custom', id: s.preset.id, name: presetById(s.preset.id)?.name || s.preset.name || 'Preset' };
 }
 function renderPresets() {
   const sel = $('preset-select');
-  sel.innerHTML = '<option value="">Elegir un preset…</option>'
-    + `<optgroup label="De la app">${BUILTIN_PRESETS.map((p, i) => `<option value="b${i}">${p.name}</option>`).join('')}</optgroup>`
-    + (state.presets.length ? `<optgroup label="Mis presets">${state.presets.map((p, i) => `<option value="u${i}">${escapeHtml(p.name)}</option>`).join('')}</optgroup>` : '');
-  $('btn-del-preset').hidden = true;
+  const groups = new Map();
+  for (const p of BUILTIN_PRESETS) { const g = p.cat || 'Presets DC'; if (!groups.has(g)) groups.set(g, []); groups.get(g).push(p); }
+  sel.innerHTML = '<option value="">Sin preset</option><option value="__custom" hidden></option>'
+    + [...groups].map(([g, list]) => `<optgroup label="DC · ${escapeHtml(g)}">${list.map((p) => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('')}</optgroup>`).join('')
+    + (state.presets.length ? `<optgroup label="Mis presets">${state.presets.map((p) => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('')}</optgroup>` : '');
+  updatePresetSelect();
 }
-function presetFrom(v) { return v[0] === 'b' ? BUILTIN_PRESETS[+v.slice(1)] : state.presets[+v.slice(1)]; }
+function updatePresetSelect() {
+  const sel = $('preset-select'), p = cur();
+  const st = presetStatus(p?.s), custom = sel.querySelector('option[value="__custom"]');
+  if (st.kind === 'exact' && sel.querySelector(`option[value="${CSS.escape(st.id)}"]`)) {
+    custom.hidden = true; sel.value = st.id;
+  } else if (st.kind !== 'none') {
+    custom.hidden = false; custom.textContent = `${st.name} · modificado`; sel.value = '__custom';
+  } else { custom.hidden = true; sel.value = ''; }
+  sel.classList.toggle('custom', st.kind === 'custom');
+  sel.title = st.kind === 'none' ? 'Esta foto no tiene preset' : st.kind === 'exact' ? `Preset: ${st.name}` : `Preset ${st.name} con cambios manuales`;
+  $('btn-preset-mix').disabled = !p;
+  $('btn-del-preset').hidden = !(st.id && st.id.startsWith('u:'));
+}
+function presetFrom(v) { return presetById(v); }
 $('preset-select').addEventListener('change', (e) => {
-  const v = e.target.value; if (!v) return;
-  const pr = presetFrom(v);
-  change((s) => { for (const k of TONE_KEYS) s[k] = structuredClone(DEFAULTS[k]); Object.assign(s, structuredClone(pr.s)); });
-  $('btn-preset-mix').disabled = false;
-  $('btn-del-preset').hidden = v[0] !== 'u';
+  const v = e.target.value; e.target.blur();
+  if (!v || v === '__custom') {
+    if (!v && presetStatus(cur()?.s).kind !== 'none') toast('Para sacar el preset usá Deshacer o Restablecer.');
+    updatePresetSelect(); return;
+  }
+  const pr = presetFrom(v); if (!pr) return updatePresetSelect();
+  // no destructivo: el preset solo mueve los mismos controles de siempre; se pueden seguir tocando
+  change((s) => {
+    for (const k of TONE_KEYS) s[k] = structuredClone(DEFAULTS[k]);
+    Object.assign(s, structuredClone(pr.s));
+    s.preset = { id: pr.id, name: pr.name, sig: toneSig(s) };
+  });
   toast(`Preset "${pr.name}" aplicado. Para usarlo en varias: seleccionalas y tocá Sincronizar.`, 3600);
 });
 $('btn-preset-mix').addEventListener('click', () => {
-  const pr = presetFrom($('preset-select').value); if (!pr) return;
-  change((s) => Object.assign(s, structuredClone(pr.s)));
-  toast(`Preset "${pr.name}" combinado con los ajustes actuales`);
+  // elegí un preset de la lista para combinarlo con lo que ya tiene la foto
+  const p = cur(); if (!p) return;
+  const opts = [...BUILTIN_PRESETS, ...state.presets];
+  modal(`<h2>Combinar con un preset</h2><p class="muted">Suma los ajustes del preset a los que ya tiene esta foto (los que el preset no toca quedan como están).</p>
+    <div class="opts"><select id="mix-select">${opts.map((o) => `<option value="${o.id}">${escapeHtml((o.cat ? o.cat + ' · ' : 'Mis presets · ') + o.name)}</option>`).join('')}</select></div>
+    <div class="modal-actions"><button class="btn ghost" data-close>Cancelar</button><button class="btn gold" id="mix-ok">Combinar</button></div>`);
+  $('mix-ok').onclick = () => {
+    const pr = presetById($('mix-select').value); closeModal(); if (!pr) return;
+    change((s) => { Object.assign(s, structuredClone(pr.s)); s.preset = { id: pr.id, name: pr.name, sig: null }; });
+    toast(`Preset "${pr.name}" combinado con los ajustes actuales`);
+  };
 });
 $('btn-save-preset').addEventListener('click', () => {
   const p = cur(); if (!p) return;
@@ -995,15 +1042,17 @@ $('btn-save-preset').addEventListener('click', () => {
   const inp = $('preset-name'); inp.focus();
   const ok = async () => {
     const name = inp.value.trim(); if (!name) return;
-    state.presets.push({ name, s: pick(p.s, TONE_KEYS) });
+    state.presets.push({ id: 'u:' + Date.now().toString(36), name, s: pick(p.s, TONE_KEYS) });
     await store.set('presets', state.presets);
     renderPresets(); closeModal(); toast(`Preset "${name}" guardado`);
   };
   $('preset-ok').onclick = ok; inp.onkeydown = (e) => { if (e.key === 'Enter') ok(); };
 });
 $('btn-del-preset').addEventListener('click', async () => {
-  const v = $('preset-select').value; if (v[0] !== 'u') return;
-  state.presets.splice(+v.slice(1), 1);
+  const id = cur()?.s.preset?.id; if (!id?.startsWith('u:')) return;
+  const k = state.presets.findIndex((p) => p.id === id); if (k < 0) return;
+  if (!confirm(`¿Borrar el preset "${state.presets[k].name}"? Las fotos editadas no cambian.`)) return;
+  state.presets.splice(k, 1);
   await store.set('presets', state.presets);
   renderPresets(); toast('Preset borrado');
 });
@@ -1015,7 +1064,7 @@ function copySettings() {
 }
 function applyToSelection(src) {
   const withGeo = $('chk-sync-crop').checked;
-  const keys = withGeo ? [...TONE_KEYS, ...GEO_KEYS] : TONE_KEYS;
+  const keys = withGeo ? [...TONE_KEYS, 'preset', ...GEO_KEYS] : [...TONE_KEYS, 'preset'];
   let n = 0;
   for (const i of state.sel) {
     const p = state.photos[i];

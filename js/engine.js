@@ -142,6 +142,7 @@ export const DEFAULTS = Object.freeze({
   dehaze: 0, noise: 0, distortion: 0, fisheye: 0, redEyes: [],
   rot: 0, ang: 0, crop: { x: 0, y: 0, w: 1, h: 1 }, aspect: 'libre', masks: [],
   pan: { x: 0, y: 0 }, fill: 0,
+  preset: null, // { id, name, sig }: qué preset se aplicó y cómo quedaron los ajustes en ese momento
 });
 
 export function freshSettings() { return structuredClone(DEFAULTS); }
