@@ -141,6 +141,7 @@ export const DEFAULTS = Object.freeze({
   cla: 0, sharp: 0, vig: 0, bw: false,
   dehaze: 0, noise: 0, distortion: 0, fisheye: 0, redEyes: [],
   rot: 0, ang: 0, crop: { x: 0, y: 0, w: 1, h: 1 }, aspect: 'libre', masks: [],
+  pan: { x: 0, y: 0 }, fill: 0,
 });
 
 export function freshSettings() { return structuredClone(DEFAULTS); }
@@ -154,9 +155,12 @@ export function outToSrc(s, srcW, srcH, ignoreCrop = false) {
   const cr = ignoreCrop ? { x: 0, y: 0, w: 1, h: 1 } : s.crop;
   const th = (s.ang || 0) * Math.PI / 180, cs = Math.cos(th), sn = Math.sin(th);
   const ac = Math.abs(cs), as = Math.abs(sn);
-  const sc = Math.max((Wf*ac + Hf*as) / Wf, (Wf*as + Hf*ac) / Hf);
+  // sc: la foto enderezada se agranda lo justo para cubrir el cuadro; fill: ampliación extra elegida por el usuario
+  const sc = Math.max((Wf*ac + Hf*as) / Wf, (Wf*as + Hf*ac) / Hf) * (1 + Math.max(0, s.fill || 0) / 100);
+  // pan: desplazamiento del contenido dentro del cuadro (fracción del cuadro, positivo = la foto va a la derecha/abajo)
+  const px = s.pan?.x || 0, py = s.pan?.y || 0;
   const map = (u, v) => {
-    const x = (cr.x + u*cr.w)*Wf - Wf/2, y = (cr.y + v*cr.h)*Hf - Hf/2;
+    const x = (cr.x + u*cr.w - px)*Wf - Wf/2, y = (cr.y + v*cr.h - py)*Hf - Hf/2;
     let ox = (cs*x + sn*y) / sc, oy = (-sn*x + cs*y) / sc;
     for (let i = 0; i < (s.rot % 4); i++) { const nx = oy, ny = -ox; ox = nx; oy = ny; }
     return [(ox + srcW/2)/srcW, (oy + srcH/2)/srcH];
@@ -164,6 +168,44 @@ export function outToSrc(s, srcW, srcH, ignoreCrop = false) {
   const [a0, b0] = map(0, 0), [a1, b1] = map(1, 0), [a2, b2] = map(0, 1);
   // mat3 en orden de columnas: x' = (a1-a0)u + (a2-a0)v + a0
   return new Float32Array([a1-a0, b1-b0, 0, a2-a0, b2-b0, 0, a0, b0, 1]);
+}
+
+/** ¿El recorte cae entero dentro de la foto? (sin esquinas negras después de enderezar, ampliar o desplazar) */
+export function geomValid(s, srcW, srcH, ignoreCrop = false) {
+  const m = outToSrc(s, srcW, srcH, ignoreCrop), e = 1e-4;
+  for (const [u, v] of [[0, 0], [1, 0], [0, 1], [1, 1]]) {
+    const x = m[0]*u + m[3]*v + m[6], y = m[1]*u + m[4]*v + m[7];
+    if (x < -e || y < -e || x > 1 + e || y > 1 + e) return false;
+  }
+  return true;
+}
+
+/** Lleva s.pan hacia `target` lo más lejos posible sin que aparezcan bordes negros (deslizando por cada eje). */
+export function fitPan(s, srcW, srcH, target, from = { x: 0, y: 0 }) {
+  const test = (x, y) => { s.pan = { x, y }; return geomValid(s, srcW, srcH); };
+  if (!test(from.x, from.y)) { from = { x: 0, y: 0 }; }
+  const search = (a, b) => { // a válido; busca el punto más lejano válido entre a y b
+    if (test(b.x, b.y)) return b;
+    let lo = 0, hi = 1;
+    for (let i = 0; i < 22; i++) { const m = (lo + hi) / 2; if (test(a.x + (b.x - a.x) * m, a.y + (b.y - a.y) * m)) lo = m; else hi = m; }
+    return { x: a.x + (b.x - a.x) * lo, y: a.y + (b.y - a.y) * lo };
+  };
+  const p1 = search(from, { x: target.x, y: from.y });
+  const p2 = search(p1, { x: p1.x, y: target.y });
+  s.pan = { x: +p2.x.toFixed(5), y: +p2.y.toFixed(5) };
+  return s.pan;
+}
+
+/** Si un cambio de ángulo, recorte o ampliación dejó el desplazamiento fuera de la foto, lo corrige. */
+export function ensurePan(s, srcW, srcH) {
+  if (!s.pan || (!s.pan.x && !s.pan.y)) return;
+  if (!srcW || geomValid(s, srcW, srcH)) return;
+  const t = { ...s.pan };
+  // conservar la dirección del desplazamiento, acortándolo lo necesario
+  s.pan = { x: 0, y: 0 };
+  let lo = 0, hi = 1;
+  for (let i = 0; i < 22; i++) { const m = (lo + hi) / 2; s.pan = { x: t.x * m, y: t.y * m }; if (geomValid(s, srcW, srcH)) lo = m; else hi = m; }
+  s.pan = { x: +(t.x * lo).toFixed(5), y: +(t.y * lo).toFixed(5) };
 }
 
 /** Medida de salida en píxeles para una foto de srcW×srcH con estos ajustes. */
@@ -297,6 +339,7 @@ export class Engine {
     gl.useProgram(p);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.src); gl.uniform1i(u.uSrc, 0);
     gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, this.blur); gl.uniform1i(u.uBlur, 1);
+    ensurePan(s, this.w, this.h); // nunca dejar bordes negros por un desplazamiento viejo
     gl.uniformMatrix3fv(u.uM, false, outToSrc(s, this.w, this.h, ignoreCrop));
     gl.uniform2f(u.uTexel, 1/this.w, 1/this.h);
     const z = before ? DEFAULTS : s;

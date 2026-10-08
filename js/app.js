@@ -1,5 +1,5 @@
 // Revelado DC · editor de fotos por lote que corre en el navegador.
-import { Engine, DEFAULTS, freshSettings, frameSize, outSize } from './engine.js';
+import { Engine, DEFAULTS, freshSettings, frameSize, outSize, fitPan, ensurePan } from './engine.js';
 import { readExif, withExif, orientationCss } from './exif.js';
 import * as store from './store.js';
 
@@ -7,7 +7,7 @@ const $ = (id) => document.getElementById(id);
 const PREVIEW_MAX = 2560;
 const EXTS = /\.(jpe?g|png|webp)$/i;
 const TONE_KEYS = ['exp', 'con', 'hi', 'sh', 'wh', 'bl', 'temp', 'tint', 'vib', 'sat', 'cla', 'sharp', 'vig', 'dehaze', 'noise', 'distortion', 'fisheye', 'bw'];
-const GEO_KEYS = ['rot', 'ang', 'crop', 'aspect'];
+const GEO_KEYS = ['rot', 'ang', 'crop', 'aspect', 'aspectV', 'pan', 'fill'];
 
 const SLIDERS = {
   'sl-luz': [
@@ -39,6 +39,7 @@ const SLIDERS = {
   ],
   'sl-crop': [
     { k: 'ang', label: 'Enderezar', min: -20, max: 20, step: 0.1, fmt: (v) => v.toFixed(1) + '°' },
+    { k: 'fill', label: 'Ampliar encuadre', min: 0, max: 60, step: 1, fmt: (v) => (v > 0 ? '+' : '') + Math.round(v) + '%' },
   ],
 };
 
@@ -69,7 +70,7 @@ const cur = () => state.photos[state.cur];
 const keyOf = (f) => `${f.name}|${f.size}|${f.lastModified}`;
 const naturalSort = (a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
 function isEdited(s) {
-  return TONE_KEYS.some((k) => (s[k] || 0) !== (DEFAULTS[k] || 0)) || s.rot || s.ang
+  return TONE_KEYS.some((k) => (s[k] || 0) !== (DEFAULTS[k] || 0)) || s.rot || s.ang || s.fill || s.pan?.x || s.pan?.y
     || s.crop.x || s.crop.y || s.crop.w !== 1 || s.crop.h !== 1 || (s.masks?.length > 0) || (s.redEyes?.length > 0);
 }
 function pick(s, keys) { const o = {}; for (const k of keys) o[k] = structuredClone(s[k]); return o; }
@@ -572,7 +573,8 @@ function syncSliders() {
     el.wrap.classList.toggle('changed', v !== 0);
   }
   $('chk-bw').checked = !!p.s.bw;
-  $('aspect-select').value = p.s.aspect || 'libre';
+  $('aspect-select').value = p.s.aspect === '7:5' ? 'p15x21' : (p.s.aspect || 'libre');
+  if (!$('aspect-select').value) $('aspect-select').value = 'libre';
   renderMasks();
 }
 
@@ -998,33 +1000,44 @@ $('btn-sel-edited').addEventListener('click', () => {
 });
 
 // ---------------------------------------------------------------- recorte y giro
+// Copias: tamaño de papel en cm (lado corto × lado largo). Se acomodan a la orientación de la foto.
+const PAPER = { p10x15: [10, 15], p13x18: [13, 18], p15x21: [15, 21], p20x25: [20, 25] };
 function aspectRatio(s) {
   const a = s.aspect || 'libre';
   if (a === 'libre') return null;
   const [Wf, Hf] = frameSize(engine.w, engine.h, s.rot);
   if (a === 'orig') return Wf / Hf;
+  if (PAPER[a]) { const [c, l] = PAPER[a], vert = s.aspectV ?? (Hf > Wf); return vert ? c / l : l / c; }
   const [x, y] = a.split(':').map(Number);
-  return x / y;
+  return x && y ? x / y : null;
 }
 function fitCrop(s) {
   const r = aspectRatio(s);
   if (!r) return;
   const [Wf, Hf] = frameSize(engine.w, engine.h, s.rot);
-  // r está en píxeles; en unidades normalizadas: w*Wf / (h*Hf) = r
+  // r está en píxeles; en unidades normalizadas: w*Wf / (h*Hf) = r. Se centra sobre el recorte actual si entra.
   let w = 1, h = (Wf / Hf) / r;
   if (h > 1) { h = 1; w = r * Hf / Wf; }
-  s.crop = { x: (1 - w) / 2, y: (1 - h) / 2, w, h };
+  const c = s.crop || { x: 0, y: 0, w: 1, h: 1 };
+  const cx = Math.max(w / 2, Math.min(1 - w / 2, c.x + c.w / 2)), cy = Math.max(h / 2, Math.min(1 - h / 2, c.y + c.h / 2));
+  s.crop = { x: cx - w / 2, y: cy - h / 2, w, h };
 }
-$('aspect-select').addEventListener('change', (e) => change((s) => { s.aspect = e.target.value; if (s.aspect === 'libre') return; fitCrop(s); }));
+$('aspect-select').addEventListener('change', (e) => change((s) => {
+  s.aspect = e.target.value; delete s.aspectV;
+  if (s.aspect === 'libre') return;
+  s.crop = { x: 0, y: 0, w: 1, h: 1 }; fitCrop(s);
+}));
 $('btn-aspect-flip').addEventListener('click', () => change((s) => {
   const a = s.aspect;
   if (!a || a === 'libre') return;
-  if (a === 'orig') { const [Wf, Hf] = frameSize(engine.w, engine.h, s.rot); s.aspect = `${Hf}:${Wf}`; }
+  const [Wf, Hf] = frameSize(engine.w, engine.h, s.rot);
+  if (a === 'orig') s.aspect = `${Hf}:${Wf}`;
+  else if (PAPER[a]) s.aspectV = !(s.aspectV ?? (Hf > Wf));
   else { const [x, y] = a.split(':'); s.aspect = `${y}:${x}`; }
-  fitCrop(s);
+  s.crop = { x: 0, y: 0, w: 1, h: 1 }; fitCrop(s);
 }));
-$('btn-rot-l').addEventListener('click', () => change((s) => { s.rot = (s.rot + 3) % 4; s.crop = { x: 0, y: 0, w: 1, h: 1 }; fitCrop(s); }));
-$('btn-rot-r').addEventListener('click', () => change((s) => { s.rot = (s.rot + 1) % 4; s.crop = { x: 0, y: 0, w: 1, h: 1 }; fitCrop(s); }));
+$('btn-rot-l').addEventListener('click', () => change((s) => { s.rot = (s.rot + 3) % 4; s.crop = { x: 0, y: 0, w: 1, h: 1 }; s.pan = { x: 0, y: 0 }; fitCrop(s); }));
+$('btn-rot-r').addEventListener('click', () => change((s) => { s.rot = (s.rot + 1) % 4; s.crop = { x: 0, y: 0, w: 1, h: 1 }; s.pan = { x: 0, y: 0 }; fitCrop(s); }));
 $('btn-crop').addEventListener('click', () => (state.cropMode ? exitCrop() : enterCrop()));
 
 function enterCrop() {
@@ -1033,6 +1046,7 @@ function enterCrop() {
   state.cropMode = true;
   $('btn-crop').classList.add('on'); $('btn-crop').textContent = '✓ Listo';
   $('crop-layer').hidden = false;
+  if (!state.cropTipShown) { state.cropTipShown = true; toast('Arrastrá la foto dentro del marco para reencuadrarla. Las esquinas y lados cambian el recorte; ✥ mueve el marco.', 6000); }
   draw();
 }
 function exitCrop() {
@@ -1051,39 +1065,73 @@ function placeCrop() {
 (() => {
   const box = $('crop-box');
   let drag = null;
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   box.addEventListener('pointerdown', (e) => {
-    const s = cur()?.s; if (!s) return;
-    e.preventDefault(); box.setPointerCapture(e.pointerId);
+    const s = cur()?.s; if (!s || e.button > 0) return;
+    e.preventDefault(); e.stopPropagation(); box.setPointerCapture(e.pointerId);
     const r = $('crop-layer').getBoundingClientRect();
-    drag = { h: e.target.dataset.h || 'move', x0: e.clientX, y0: e.clientY, c0: { ...s.crop }, rw: r.width, rh: r.height };
+    // adentro del marco = mover la FOTO (reencuadre); ✥ = mover el marco; bordes y esquinas = cambiar el recorte
+    const h = e.target.dataset.h || 'pan';
+    drag = { h, id: e.pointerId, x0: e.clientX, y0: e.clientY, c0: { ...s.crop }, p0: { ...(s.pan || { x: 0, y: 0 }) }, rw: r.width, rh: r.height, moved: false };
+    if (h === 'pan') box.classList.add('panning');
   });
   box.addEventListener('pointermove', (e) => {
-    if (!drag) return;
+    if (!drag || e.pointerId !== drag.id) return;
     const s = cur().s, c0 = drag.c0;
     const dx = (e.clientX - drag.x0) / drag.rw, dy = (e.clientY - drag.y0) / drag.rh;
-    const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+    drag.moved = true;
+    if (drag.h === 'pan') {
+      // la foto sigue al mouse; se frena sola donde aparecería un borde negro
+      const got = fitPan(s, engine.w, engine.h, { x: drag.p0.x + dx, y: drag.p0.y + dy }, drag.p0);
+      const want = Math.hypot(dx, dy), moved = Math.hypot(got.x - drag.p0.x, got.y - drag.p0.y);
+      if (want > .04 && moved < want * .15 && !drag.hinted) {
+        drag.hinted = true;
+        toast('No queda foto de ese lado para mover. Achicá el recorte o subí «Ampliar encuadre» para tener margen.', 5000);
+      }
+      draw(); return;
+    }
     if (drag.h === 'move') {
       s.crop = { ...c0, x: clamp(c0.x + dx, 0, 1 - c0.w), y: clamp(c0.y + dy, 0, 1 - c0.h) };
     } else {
-      const west = drag.h.includes('w'), north = drag.h.includes('n');
-      const ax = west ? c0.x + c0.w : c0.x, ay = north ? c0.y + c0.h : c0.y; // esquina fija
-      let w = clamp(west ? c0.w - dx : c0.w + dx, 0.05, west ? ax : 1 - ax);
-      let h = clamp(north ? c0.h - dy : c0.h + dy, 0.05, north ? ay : 1 - ay);
-      const r = aspectRatio(s);
-      if (r) {
-        const [Wf, Hf] = frameSize(engine.w, engine.h, s.rot);
-        const k = r * Hf / Wf; // w = k·h
-        if (w / h > k) w = h * k; else h = w / k;
-        const maxW = west ? ax : 1 - ax, maxH = north ? ay : 1 - ay;
-        if (w > maxW) { w = maxW; h = w / k; }
-        if (h > maxH) { h = maxH; w = h * k; }
+      const r = aspectRatio(s), [Wf, Hf] = frameSize(engine.w, engine.h, s.rot);
+      const k = r ? r * Hf / Wf : 0; // con proporción fija: w = k·h (en unidades del cuadro)
+      const hz = drag.h.includes('w') ? -1 : drag.h.includes('e') ? 1 : 0;
+      const vt = drag.h.includes('n') ? -1 : drag.h.includes('s') ? 1 : 0;
+      let x0 = c0.x, y0 = c0.y, x1 = c0.x + c0.w, y1 = c0.y + c0.h;
+      if (hz && vt) {
+        // esquina: la opuesta queda fija
+        const ax = hz < 0 ? x1 : x0, ay = vt < 0 ? y1 : y0;
+        const maxW = hz < 0 ? ax : 1 - ax, maxH = vt < 0 ? ay : 1 - ay;
+        let w = clamp(c0.w + hz * dx, .03, maxW), h = clamp(c0.h + vt * dy, .03, maxH);
+        if (k) {
+          if (w / k >= h) h = w / k; else w = h * k; // sigue al lado que más se movió
+          if (h > maxH) { h = maxH; w = h * k; }
+          if (w > maxW) { w = maxW; h = w / k; }
+        }
+        x0 = hz < 0 ? ax - w : ax; y0 = vt < 0 ? ay - h : ay; x1 = x0 + w; y1 = y0 + h;
+      } else if (hz) {
+        // lado izquierdo/derecho: cambia el ancho; con proporción fija el alto acompaña (centrado)
+        const ax = hz < 0 ? x1 : x0, cy = (y0 + y1) / 2;
+        let w = clamp(c0.w + hz * dx, .03, hz < 0 ? ax : 1 - ax), h = c0.h;
+        if (k) { h = w / k; const maxH = 2 * Math.min(cy, 1 - cy); if (h > maxH) { h = maxH; w = h * k; } }
+        x0 = hz < 0 ? ax - w : ax; x1 = x0 + w; y0 = cy - h / 2; y1 = cy + h / 2;
+      } else if (vt) {
+        const ay = vt < 0 ? y1 : y0, cx = (x0 + x1) / 2;
+        let h = clamp(c0.h + vt * dy, .03, vt < 0 ? ay : 1 - ay), w = c0.w;
+        if (k) { w = h * k; const maxW = 2 * Math.min(cx, 1 - cx); if (w > maxW) { w = maxW; h = w / k; } }
+        y0 = vt < 0 ? ay - h : ay; y1 = y0 + h; x0 = cx - w / 2; x1 = cx + w / 2;
       }
-      s.crop = { x: west ? ax - w : ax, y: north ? ay - h : ay, w, h };
+      s.crop = { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
     }
-    placeCrop();
+    ensurePan(s, engine.w, engine.h);
+    placeCrop(); draw();
   });
-  const end = () => { if (drag) { drag = null; save(cur()); } };
+  const end = (e) => { if (!drag || (e && e.pointerId !== drag.id)) return; const moved = drag.moved; drag = null; box.classList.remove('panning'); if (moved) { save(cur()); refreshStrip(); } };
   box.addEventListener('pointerup', end); box.addEventListener('pointercancel', end);
+  box.addEventListener('dblclick', (e) => { // doble clic adentro: foto centrada otra vez
+    if (e.target.dataset.h) return; const p = cur(); if (!p) return;
+    p.s.pan = { x: 0, y: 0 }; draw(); save(p);
+  });
 })();
 
 // ---------------------------------------------------------------- antes / después

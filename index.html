@@ -35,6 +35,9 @@
           <i class="grid"></i>
           <span class="h nw" data-h="nw"></span><span class="h ne" data-h="ne"></span>
           <span class="h sw" data-h="sw"></span><span class="h se" data-h="se"></span>
+          <span class="ed ed-n" data-h="n"></span><span class="ed ed-s" data-h="s"></span>
+          <span class="ed ed-w" data-h="w"></span><span class="ed ed-e" data-h="e"></span>
+          <span class="mv" data-h="move" title="Mover el marco de recorte">✥</span>
         </div>
       </div>
       <div class="badge-before" id="badge-before" hidden>ANTES</div>
@@ -127,21 +130,27 @@
       <div class="row gap">
         <button class="btn small ghost" id="btn-rot-l" title="Girar a la izquierda">↺ 90°</button>
         <button class="btn small ghost" id="btn-rot-r" title="Girar a la derecha">↻ 90°</button>
-        <button class="btn small" id="btn-crop" title="Recortar (R)">✂ Recortar</button>
+        <button class="btn small" id="btn-crop" title="Recortar y reencuadrar (R)">✂ Recortar</button>
       </div>
       <div id="sl-crop"></div>
       <div class="row gap">
-        <select id="aspect-select">
+        <select id="aspect-select" title="Proporción del recorte">
           <option value="libre">Proporción libre</option>
           <option value="orig">Original</option>
-          <option value="3:2">3:2 · 10×15 / 20×30</option>
-          <option value="7:5">7:5 · 13×18</option>
-          <option value="5:4">5:4 · 20×25</option>
-          <option value="4:3">4:3</option>
           <option value="1:1">1:1 · cuadrada</option>
+          <option value="3:2">3:2</option>
+          <option value="2:3">2:3</option>
           <option value="4:5">4:5 · Instagram</option>
+          <option value="5:4">5:4</option>
+          <option value="4:3">4:3</option>
           <option value="16:9">16:9</option>
           <option value="9:16">9:16 · historias</option>
+          <optgroup label="Copias (se acomoda a la orientación)">
+            <option value="p10x15">10×15</option>
+            <option value="p13x18">13×18</option>
+            <option value="p15x21">15×21</option>
+            <option value="p20x25">20×25</option>
+          </optgroup>
         </select>
         <button class="btn small ghost" id="btn-aspect-flip" title="Vertical / horizontal">⇄</button>
       </div>

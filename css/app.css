@@ -120,6 +120,18 @@ select { flex: 1; min-width: 0; background: #0f0e20; color: var(--ink); border: 
 .crop-box .ne { right: -4px; top: -4px; border-left: 0; border-bottom: 0; cursor: nesw-resize; }
 .crop-box .sw { left: -4px; bottom: -4px; border-right: 0; border-top: 0; cursor: nesw-resize; }
 .crop-box .se { right: -4px; bottom: -4px; border-left: 0; border-top: 0; cursor: nwse-resize; }
+.crop-box { cursor: grab; }
+.crop-box.panning { cursor: grabbing; }
+.crop-box .ed { position: absolute; background: transparent; }
+.crop-box .ed::after { content: ""; position: absolute; background: var(--gold); border-radius: 2px; }
+.crop-box .ed-n, .crop-box .ed-s { left: 22px; right: 22px; height: 14px; cursor: ns-resize; }
+.crop-box .ed-n { top: -7px; } .crop-box .ed-s { bottom: -7px; }
+.crop-box .ed-n::after, .crop-box .ed-s::after { left: calc(50% - 14px); width: 28px; top: 5px; height: 4px; }
+.crop-box .ed-w, .crop-box .ed-e { top: 22px; bottom: 22px; width: 14px; cursor: ew-resize; }
+.crop-box .ed-w { left: -7px; } .crop-box .ed-e { right: -7px; }
+.crop-box .ed-w::after, .crop-box .ed-e::after { top: calc(50% - 14px); height: 28px; left: 5px; width: 4px; }
+.crop-box .mv { position: absolute; left: calc(50% - 15px); top: 10px; width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center;
+  background: #17152b; color: var(--gold); border: 2px solid var(--gold); font-size: 16px; line-height: 1; cursor: move; box-shadow: 0 2px 8px rgba(0,0,0,.6); user-select: none; }
 
 /* Tira de fotos */
 .strip { background: var(--bg2); border-top: 1px solid var(--line); }
