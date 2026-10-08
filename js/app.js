@@ -1652,7 +1652,36 @@ async function openEyeFix(fi) {
         $('fix-before').replaceChildren(fit(res.before)); $('fix-after').replaceChildren(fit(res.after));
         $('fix-preview').hidden = false;
         $('fix-status').textContent = `Ojos tomados de ${c.x.name}. Si no queda natural, probá con otra.`;
-        $('fix-actions').innerHTML = '<button class="btn ghost" data-close>Cancelar</button><button class="btn gold" id="fix-ok">Aplicar</button>';
+        // otras fotos seleccionadas con ojos cerrados sin arreglar (misma tanda: mismos ojos)
+        const others = [...state.sel].map((i) => state.photos[i]).filter((x) => x && x !== p && x !== c.x && openCount(x) > 0);
+        $('fix-actions').innerHTML = '<button class="btn ghost" data-close>Cancelar</button>'
+          + (others.length ? `<button class="btn" id="fix-many" title="Usa los mismos ojos en las otras fotos seleccionadas que tengan una cara con ojos cerrados en un lugar parecido">Aplicar a esta y ${others.length} seleccionada${others.length === 1 ? '' : 's'} más</button>` : '')
+          + '<button class="btn gold" id="fix-ok">Aplicar</button>';
+        if (others.length) $('fix-many').onclick = async () => {
+          $('fix-actions').innerHTML = '';
+          let ok = 0, skipped = [];
+          const applyTo = async (x, res) => {
+            const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+            await store.set('eyepatch:' + id, res.blob);
+            x.hist.push(structuredClone(x.s));
+            x.s.eyePatches = (x.s.eyePatches || []).filter((pa) => !(pa.x < res.x + res.w && pa.x + pa.w > res.x && pa.y < res.y + res.h && pa.y + pa.h > res.y));
+            x.s.eyePatches.push({ id, x: res.x, y: res.y, w: res.w, h: res.h, from: c.x.name });
+            save(x);
+          };
+          await applyTo(p, res); ok++;
+          for (const [n, x] of others.entries()) {
+            $('fix-status').textContent = `Aplicando en ${x.name} (${n + 1} de ${others.length})…`;
+            // la cara con ojos cerrados que está en un lugar y tamaño parecidos a la de esta foto
+            const fc = face.x + face.w / 2, fy = face.y + face.h / 2;
+            const tf = (x.eyes?.faces || []).filter((f) => faceState(f) && !faceFixed(x, f))
+              .map((f) => ({ f, d: Math.hypot(f.x + f.w / 2 - fc, f.y + f.h / 2 - fy) + Math.abs(Math.log(f.w / face.w)) * 0.3 }))
+              .sort((a, b) => a.d - b.d)[0];
+            if (!tf || tf.d > 0.25) { skipped.push(x.name); continue; }
+            try { await applyTo(x, await eyes.buildEyePatch(x.file, tf.f, c.x.file, c.f)); ok++; } catch (e) { console.warn(e); skipped.push(x.name); }
+          }
+          closeModal(); syncSliders(); draw(); refreshStrip();
+          toast(`Ojos abiertos en ${ok} foto${ok === 1 ? '' : 's'}` + (skipped.length ? ` · sin arreglar (la cara no estaba en un lugar parecido): ${skipped.slice(0, 4).join(', ')}${skipped.length > 4 ? '…' : ''}` : '') + '. Revisalas una por una.', 7000);
+        };
         $('fix-ok').onclick = async () => {
           const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
           await store.set('eyepatch:' + id, res.blob);
