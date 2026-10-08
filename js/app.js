@@ -497,6 +497,7 @@ async function getPreview(p) {
 async function selectPhoto(i, resetSel = true) {
   if (i < 0 || i >= state.photos.length) return;
   if (state.cropMode) exitCrop();
+  presetPicker?.close();
   state.cur = i;
   state.selectedMask = -1;
   saveSession();
@@ -540,7 +541,7 @@ function drawNow() {
   const fit = Math.min((vp.clientWidth - 24) * dpr / ow, (vp.clientHeight - 24) * dpr / oh, 1);
   const k = fit * state.zoom;
   const w = Math.max(1, Math.round(ow*k)), h = Math.max(1, Math.round(oh*k));
-  engine.render(p.s, w, h, { before: state.before, ignoreCrop: state.cropMode });
+  engine.render(state.previewS || p.s, w, h, { before: state.before, ignoreCrop: state.cropMode });
   const cv = $('view');
   cv.style.width = (w / dpr) + 'px'; cv.style.height = (h / dpr) + 'px';
   cv.style.transform = `translate(${state.panX}px, ${state.panY}px)`;
@@ -1116,6 +1117,7 @@ function updatePresetSelect() {
     custom.hidden = false; custom.textContent = st.kind === 'exact' ? st.name : `${st.name} · modificado`; sel.value = '__custom';
   } else { custom.hidden = true; sel.value = ''; }
   sel.classList.toggle('custom', st.kind === 'custom');
+  queueMicrotask(() => presetPicker?.sync());
   sel.title = st.kind === 'none' ? 'Esta foto no tiene preset' : st.kind === 'exact' ? `Preset: ${st.name}` : `Preset ${st.name} con cambios manuales`;
   $('btn-preset-mix').disabled = !p;
   $('btn-preset-mix').title = 'Activado: cada preset se suma encima del que ya tiene la foto';
@@ -1125,6 +1127,33 @@ function presetFrom(v) { return presetById(v); }
 // Rangos de cada control, para que al combinar presets los valores no se pasen de lo que permite el deslizador
 const KEY_RANGE = (() => { const r = {}; for (const list of Object.values(SLIDERS)) for (const d of list) r[d.k] = [d.min ?? -100, d.max ?? 100]; return r; })();
 state.mixMode = false;
+// Cómo quedan los ajustes al aplicar un preset (reemplazando o sumando). Se usa para aplicar y para la vista previa.
+function presetResult(s0, pr, mix) {
+  const s = structuredClone(s0), before = presetStatus(s0);
+  if (mix && before.kind !== 'none') {
+    // Combinar: el preset se SUMA a lo que ya tiene la foto (uno encima del otro)
+    for (const [k, val] of Object.entries(pr.s)) {
+      if (k === 'bw') { s.bw = s.bw || val; continue; }
+      if (k === 'shH' || k === 'hiH') { if ((k === 'shH' ? pr.s.shS : pr.s.hiS) > (k === 'shH' ? s.shS : s.hiS) / 2) s[k] = val; continue; }
+      const [lo, hi] = KEY_RANGE[k] || [-100, 100];
+      s[k] = Math.max(lo, Math.min(hi, +((s[k] || 0) + val).toFixed(2)));
+    }
+    const name = `${before.name} + ${pr.name}`;
+    s.preset = { id: 'mix:' + Date.now().toString(36), name: name.length > 60 ? name.slice(0, 57) + '…' : name, sig: toneSig(s) };
+    return s;
+  }
+  // no destructivo: el preset solo mueve los mismos controles de siempre; se pueden seguir tocando
+  for (const k of TONE_KEYS) s[k] = structuredClone(DEFAULTS[k]);
+  Object.assign(s, structuredClone(pr.s));
+  s.preset = { id: pr.id, name: pr.name, sig: toneSig(s) };
+  return s;
+}
+function applyPreset(pr) {
+  const mixed = state.mixMode && presetStatus(cur()?.s).kind !== 'none';
+  const next = presetResult(cur().s, pr, state.mixMode);
+  change((s) => { for (const k of [...TONE_KEYS, 'preset']) s[k] = structuredClone(next[k]); });
+  toast(mixed ? `Sumado "${pr.name}" encima de lo que ya tenía la foto` : `Preset "${pr.name}" aplicado. Para usarlo en varias: seleccionalas y tocá Sincronizar.`, 3600);
+}
 $('preset-select').addEventListener('change', (e) => {
   const v = e.target.value; e.target.blur();
   if (!v || v === '__custom') {
@@ -1132,30 +1161,68 @@ $('preset-select').addEventListener('change', (e) => {
     updatePresetSelect(); return;
   }
   const pr = presetFrom(v); if (!pr) return updatePresetSelect();
-  const before = presetStatus(cur()?.s);
-  if (state.mixMode && before.kind !== 'none') {
-    // Combinar: el preset se SUMA a lo que ya tiene la foto (uno encima del otro)
-    change((s) => {
-      for (const [k, val] of Object.entries(pr.s)) {
-        if (k === 'bw') { s.bw = s.bw || val; continue; }
-        if (k === 'shH' || k === 'hiH') { if ((k === 'shH' ? pr.s.shS : pr.s.hiS) > (k === 'shH' ? s.shS : s.hiS) / 2) s[k] = val; continue; }
-        const [lo, hi] = KEY_RANGE[k] || [-100, 100];
-        s[k] = Math.max(lo, Math.min(hi, +((s[k] || 0) + val).toFixed(2)));
-      }
-      const name = `${before.name} + ${pr.name}`;
-      s.preset = { id: 'mix:' + Date.now().toString(36), name: name.length > 60 ? name.slice(0, 57) + '…' : name, sig: toneSig(s) };
-    });
-    toast(`Sumado "${pr.name}" encima de lo que ya tenía la foto`);
-    return;
-  }
-  // no destructivo: el preset solo mueve los mismos controles de siempre; se pueden seguir tocando
-  change((s) => {
-    for (const k of TONE_KEYS) s[k] = structuredClone(DEFAULTS[k]);
-    Object.assign(s, structuredClone(pr.s));
-    s.preset = { id: pr.id, name: pr.name, sig: toneSig(s) };
-  });
-  toast(`Preset "${pr.name}" aplicado. Para usarlo en varias: seleccionalas y tocá Sincronizar.`, 3600);
+  applyPreset(pr);
 });
+
+// ---- Lista de presets propia: al pasar el mouse por un preset, la foto lo muestra al instante (vista previa)
+const presetPicker = (() => {
+  const sel = $('preset-select');
+  const btn = document.createElement('button'); btn.type = 'button'; btn.className = 'preset-btn'; btn.id = 'preset-btn';
+  const pop = document.createElement('div'); pop.className = 'preset-pop'; pop.hidden = true; pop.setAttribute('role', 'listbox');
+  sel.after(btn, pop); sel.hidden = true;
+  let items = [], idx = -1;
+  const preview = (id) => {
+    const p = cur(), pr = presetById(id);
+    state.previewS = p && pr ? presetResult(p.s, pr, state.mixMode) : null;
+    draw();
+  };
+  const stopPreview = () => { if (state.previewS) { state.previewS = null; draw(); } };
+  const close = () => { pop.hidden = true; btn.classList.remove('open'); stopPreview(); document.removeEventListener('pointerdown', outside, true); };
+  const outside = (e) => { if (!pop.contains(e.target) && e.target !== btn) close(); };
+  const mark = (k, show = true) => {
+    items.forEach((el, i) => el.classList.toggle('hover', i === k)); idx = k;
+    if (k >= 0) { items[k].scrollIntoView({ block: 'nearest' }); if (show) preview(items[k].dataset.id); }
+  };
+  const open = () => {
+    if (!cur()) return;
+    pop.innerHTML = '';
+    if (state.mixMode) pop.insertAdjacentHTML('beforeend', '<div class="pp-note">Combinando: el preset se suma a lo que ya tiene la foto</div>');
+    for (const node of sel.children) {
+      if (node.tagName === 'OPTGROUP') {
+        pop.insertAdjacentHTML('beforeend', `<div class="pp-group">${escapeHtml(node.label)}</div>`);
+        for (const o of node.children) {
+          const it = document.createElement('div'); it.className = `pp-item ${o.value === sel.value ? 'on' : ''}`; it.dataset.id = o.value; it.textContent = o.textContent; it.setAttribute('role', 'option');
+          pop.appendChild(it);
+        }
+      }
+    }
+    items = [...pop.querySelectorAll('.pp-item')];
+    pop.hidden = false; btn.classList.add('open');
+    // que la lista entre entera en el panel (si no, se cortaba abajo en pantallas chicas)
+    const pr = $('panel').getBoundingClientRect(), top = pop.getBoundingClientRect().top;
+    pop.style.maxHeight = Math.max(220, pr.bottom - top - 10) + 'px';
+    document.addEventListener('pointerdown', outside, true);
+    const k = items.findIndex((el) => el.classList.contains('on')); if (k >= 0) mark(k, false);
+  };
+  pop.addEventListener('pointerover', (e) => { const it = e.target.closest('.pp-item'); if (it) mark(items.indexOf(it)); });
+  pop.addEventListener('pointerleave', stopPreview); // te vas de la lista sin elegir: la foto vuelve a como estaba
+  pop.addEventListener('click', (e) => { const it = e.target.closest('.pp-item'); if (!it) return; const pr = presetById(it.dataset.id); close(); if (pr) applyPreset(pr); });
+  btn.addEventListener('click', () => (pop.hidden ? open() : close()));
+  btn.addEventListener('keydown', (e) => {
+    if (pop.hidden && (e.key === 'Enter' || e.key === 'ArrowDown')) { e.preventDefault(); open(); return; }
+    if (pop.hidden) return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); e.stopPropagation(); mark(Math.max(0, Math.min(items.length - 1, idx + (e.key === 'ArrowDown' ? 1 : -1)))); }
+    else if (e.key === 'Enter' && idx >= 0) { e.preventDefault(); const pr = presetById(items[idx].dataset.id); close(); if (pr) applyPreset(pr); }
+    else if (e.key === 'Escape') { e.preventDefault(); close(); }
+  });
+  const sync = () => {
+    const o = sel.options[sel.selectedIndex];
+    btn.textContent = o && !o.hidden ? o.textContent : 'Sin preset';
+    btn.classList.toggle('custom', sel.classList.contains('custom'));
+    btn.title = sel.title || 'Elegí un preset (pasá el mouse para verlo en la foto)';
+  };
+  return { sync, close };
+})();
 $('btn-preset-mix').addEventListener('click', () => {
   state.mixMode = !state.mixMode;
   $('btn-preset-mix').classList.toggle('on', state.mixMode);

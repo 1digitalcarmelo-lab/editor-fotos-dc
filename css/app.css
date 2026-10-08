@@ -178,3 +178,15 @@ input[type=text] { width: 100%; background: #0b0f1c; color: var(--ink); border: 
 .seq-opts .muted { grid-column: 1 / -1; margin: 0; }
 #view { cursor: grab; touch-action: none; }
 .viewport.reframing #view { cursor: grabbing; }
+/* Lista de presets con vista previa al pasar el mouse */
+.preset-btn { flex: 1; min-width: 0; text-align: left; background: #0b0f1c url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8'%3E%3Cpath d='M1 1l5 5 5-5' fill='none' stroke='%23edeef4' stroke-width='1.6'/%3E%3C/svg%3E") no-repeat right 10px center; color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 7px 28px 7px 10px; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.preset-btn:hover, .preset-btn.open { border-color: var(--gold); }
+.preset-btn.custom { color: var(--gold-soft); font-style: italic; }
+.block:has(.preset-pop) { position: relative; }
+.preset-pop { position: absolute; left: 16px; right: 16px; top: 72px; z-index: 20; max-height: min(62vh, 520px); overflow-y: auto; background: #0d1120; border: 1px solid var(--gold); border-radius: 10px; padding: 6px 0; box-shadow: 0 18px 40px rgba(0,0,0,.6); }
+.preset-pop .pp-group { padding: 8px 14px 4px; font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--gold); }
+.preset-pop .pp-item { padding: 6px 14px 6px 22px; font-size: 13px; cursor: pointer; color: var(--ink); }
+.preset-pop .pp-item.hover { background: #1c2442; color: var(--gold-soft); }
+.preset-pop .pp-item.on { font-weight: 700; }
+.preset-pop .pp-item.on::before { content: "✓ "; margin-left: -14px; color: var(--gold); }
+.preset-pop .pp-note { margin: 2px 10px 6px; padding: 6px 8px; font-size: 12px; color: var(--gold-soft); background: rgba(226,184,102,.1); border-radius: 6px; }
