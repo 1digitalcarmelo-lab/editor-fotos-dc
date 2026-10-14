@@ -192,7 +192,39 @@ function openBackup() {
       <button class="btn ghost" id="bk-up" ${state.photos.length ? '' : 'disabled'}>⇧ Cargar una copia guardada</button>
       <input type="file" id="bk-file" accept=".json,application/json" hidden>
     </div>
+    <h3 style="margin:1.1rem 0 .3rem">Mis presets</h3>
+    <p class="muted">Guardá tus presets en un archivo para pasarlos a otra compu u otro navegador.</p>
+    <div class="opts">
+      <button class="btn" id="pr-down" ${state.presets.length ? '' : 'disabled'}>⇩ Descargar mis presets (${state.presets.length})</button>
+      <button class="btn ghost" id="pr-up">⇧ Cargar presets</button>
+      <input type="file" id="pr-file" accept=".json,application/json" hidden>
+    </div>
     <div class="modal-actions"><button class="btn gold" data-close>Cerrar</button></div>`);
+  $('pr-down').onclick = () => {
+    const data = { app: 'Revelado DC', kind: 'presets', version: 1, saved: new Date().toISOString(), presets: state.presets };
+    const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 1)], { type: 'application/json' }));
+    const a = document.createElement('a'); a.href = url; a.download = 'revelado-dc-mis-presets.json'; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+  };
+  $('pr-up').onclick = () => $('pr-file').click();
+  $('pr-file').onchange = async (e) => {
+    try {
+      const data = JSON.parse(await e.target.files[0].text());
+      const list = Array.isArray(data.presets) ? data.presets : [];
+      if (!list.length) throw new Error('vacío');
+      let n = 0;
+      for (const pr of list) {
+        if (!pr || !pr.name || !pr.s) continue;
+        const same = state.presets.findIndex((x) => (pr.id && x.id === pr.id) || x.name === pr.name);
+        const item = { ...pr, id: pr.id || 'u:' + Math.random().toString(36).slice(2, 10) };
+        if (same >= 0) state.presets[same] = item; else state.presets.push(item);
+        n++;
+      }
+      await store.set('presets', state.presets);
+      renderPresets();
+      closeModal(); toast(n ? `${n} presets cargados` : 'Ese archivo no tiene presets');
+    } catch { toast('Ese archivo no es una copia de presets de Revelado DC'); }
+  };
   $('bk-down').onclick = () => {
     const url = URL.createObjectURL(new Blob([JSON.stringify(sidecarData(), null, 1)], { type: 'application/json' }));
     const a = document.createElement('a'); a.href = url; a.download = SIDE; a.click();
