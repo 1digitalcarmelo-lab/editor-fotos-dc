@@ -117,6 +117,11 @@ const state = {
 };
 
 const engine = new Engine($('view'));
+// Si la placa de video se reinicia (driver, poca memoria), avisar en lugar de quedar en negro.
+$('view').addEventListener('webglcontextlost', (e) => {
+  e.preventDefault();
+  toast('La placa de video se reinició. Tus ajustes están guardados: recargá la página (F5) para seguir.', 12000);
+});
 let previewBitmap = null;
 
 // ---------------------------------------------------------------- utilidades
@@ -1987,9 +1992,27 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').then
   });
 }).catch(() => {});
 let installEvt = null;
-window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt = e; $('btn-install').hidden = false; });
-$('btn-install').addEventListener('click', async () => {
-  if (!installEvt) return;
-  installEvt.prompt(); await installEvt.userChoice; installEvt = null; $('btn-install').hidden = true;
+const standalone = () => matchMedia('(display-mode: standalone)').matches || matchMedia('(display-mode: window-controls-overlay)').matches;
+const hintDismissed = () => { try { return localStorage.getItem('revelado-install-hint') === 'no'; } catch { return false; } };
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault(); installEvt = e; $('btn-install').hidden = false;
+  // Usada desde una pestaña, la app comparte la ventana con el resto de Chrome:
+  // si se cierra esa ventana (o "Cerrar todas las ventanas" en la barra de tareas), se cierra todo junto.
+  // Instalada, tiene su propia ventana e ícono, y se cierra sola.
+  if (!standalone() && !hintDismissed()) $('install-hint').hidden = false;
 });
-window.addEventListener('appinstalled', () => toast('¡Listo! Revelado DC quedó instalado en tu compu'));
+async function promptInstall() {
+  if (!installEvt) return;
+  installEvt.prompt(); await installEvt.userChoice; installEvt = null;
+  $('btn-install').hidden = true; $('install-hint').hidden = true;
+}
+$('btn-install').addEventListener('click', promptInstall);
+$('install-hint-go').addEventListener('click', promptInstall);
+$('install-hint-x').addEventListener('click', () => {
+  $('install-hint').hidden = true;
+  try { localStorage.setItem('revelado-install-hint', 'no'); } catch { /* sin guardado */ }
+});
+window.addEventListener('appinstalled', () => { $('install-hint').hidden = true; toast('¡Listo! Revelado DC quedó instalado en tu compu. Desde ahora abrilo con su ícono.', 5000); });
+
+// Si se intenta cerrar la ventana mientras se exporta (o se arreglan ojos), el navegador pregunta antes.
+window.addEventListener('beforeunload', (e) => { if (exporting) { e.preventDefault(); e.returnValue = ''; } });
