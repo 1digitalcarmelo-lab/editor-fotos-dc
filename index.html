@@ -209,7 +209,28 @@
   <div class="modal-card" id="modal-card"></div>
 </div>
 <div class="toast" id="toast"></div>
+<div class="install-hint" id="install-hint" hidden>
+  <span>Instalá Revelado DC para usarlo como programa: abre en su propia ventana, con su ícono, y al cerrarlo no toca tus otras ventanas de Chrome.</span>
+  <button class="btn gold" id="install-hint-go">⊕ Instalar</button>
+  <button class="install-hint-x" id="install-hint-x" title="Ahora no" aria-label="Cerrar aviso">×</button>
+</div>
 
+<div class="unsupported" id="unsupported" hidden>
+  <div class="unsupported-card">
+    <img src="assets/branding/logo-principal.png" alt="" width="64" height="64">
+    <h2>Esta compu o navegador no puede abrir Revelado DC</h2>
+    <p id="unsupported-why">Revelado DC usa la placa de video para editar las fotos rápido y sin subirlas a ningún lado.</p>
+    <p>Abrilo con <b>Google Chrome</b> o <b>Microsoft Edge</b> actualizados, en una computadora (no en el celular). Si ya lo estás usando ahí, revisá en la configuración del navegador que esté activada la <b>aceleración por hardware</b> y volvé a abrirlo.</p>
+  </div>
+</div>
+<script>
+// Antes de cargar la app: si no hay WebGL2, se muestra un aviso claro en lugar de una pantalla vacía.
+(function () {
+  var ok = false;
+  try { ok = !!document.createElement('canvas').getContext('webgl2'); } catch (e) { ok = false; }
+  if (!ok) { document.getElementById('unsupported').hidden = false; document.documentElement.classList.add('no-webgl2'); }
+})();
+</script>
 <script type="module" src="js/app.js"></script>
 </body>
 </html>
