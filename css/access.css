@@ -1,0 +1,28 @@
+/* El editor conserva sus estilos. El acceso se resuelve antes de iniciarlo. */
+body.dc-auth-pending #app { display:none!important; }
+body { display:block; }
+body.dc-auth-pending { overflow:auto; }
+#app { display:grid; grid-template-rows:auto minmax(0,1fr) auto; grid-template-columns:minmax(0,1fr); height:100vh; height:100dvh; overflow:hidden; }
+.dc-account [hidden] { display:none!important; }
+.dc-account__panel { overflow-y:auto; }
+#app .stage { grid-template-columns:minmax(0,1fr); }
+#app .viewport { min-width:0; }
+.dc-initial-loading { padding:2rem; color:#f2d188; background:#111336; margin:0; min-height:100vh; font:600 16px system-ui; }
+body.dc-license-locked #app { visibility:hidden; pointer-events:none; }
+#dc-license-root { position:fixed; inset:0; z-index:1000001; overflow:auto; background:#0b0d27; color:#fff; padding:24px; box-sizing:border-box; display:grid; place-items:center; font:16px/1.5 Inter,system-ui,sans-serif; }
+#dc-license-root[hidden] { display:none!important; }
+.license-card { width:min(100%,540px); padding:28px; box-sizing:border-box; border:1px solid #d3ac49; border-radius:20px; background:#151736; }
+.license-card h1 { font-size:26px; margin:0 0 16px; }
+.license-card p { color:#e1e3ef; }
+.license-card button,.license-card a { display:block; width:100%; box-sizing:border-box; min-height:44px; margin-top:12px; padding:12px; border-radius:10px; border:1px solid #d3ac49; background:#f2d188; color:#0d0e32; font:700 15px Inter,system-ui,sans-serif; cursor:pointer; text-align:center; text-decoration:none; }
+.license-card button:disabled { opacity:.6; cursor:wait; }
+.license-card button:focus-visible,.license-card a:focus-visible { outline:3px solid white; outline-offset:3px; }
+.license-card .secondary { background:transparent; color:#f2d188; }
+#dc-legacy-note { padding:16px; border:1px solid #d3ac49; border-radius:12px; margin:18px 0; }
+#dc-legacy-note button { min-height:44px; }
+@media(max-width:700px) { body.dc-mobile-menu-ready #app { height:calc(100dvh - 72px - env(safe-area-inset-top,0px)); } }
+@media(max-width:860px) {
+  #app, body.dc-mobile-menu-ready #app { height:auto; min-height:calc(100dvh - 72px); overflow:visible; }
+  #app .stage-bar { min-width:0; flex-wrap:wrap; }
+}
+

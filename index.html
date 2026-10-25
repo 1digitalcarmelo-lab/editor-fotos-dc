@@ -11,12 +11,25 @@
 <meta name="theme-color" content="#0d1120">
 <link rel="apple-touch-icon" sizes="180x180" href="assets/branding/apple-touch-icon.png">
 <link rel="stylesheet" href="css/app.css">
+<link rel="stylesheet" href="css/access.css">
+<link rel="canonical" href="https://editor-fotos-dc.netlify.app/">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Revelado DC · Digital Carmelo">
+<meta property="og:description" content="Edita tus fotos por lote. Tus originales permanecen en tu dispositivo.">
+<meta property="og:url" content="https://editor-fotos-dc.netlify.app/">
+<meta property="og:image" content="https://editor-fotos-dc.netlify.app/assets/branding/icon-512.png">
+<meta property="og:image:width" content="512">
+<meta property="og:image:height" content="512">
+<meta name="twitter:card" content="summary">
 </head>
-<body>
+<body class="dc-auth-pending">
+<div id="dc-auth-root"><p class="dc-initial-loading" role="status">Preparando tu acceso…</p></div>
+<div id="dc-license-root" hidden></div>
+<div id="app">
 <header class="top">
   <div class="brand"><img class="brand-logo" src="assets/branding/logo-principal.png" alt="Digital Carmelo" width="52" height="52"><div><b>Revelado DC</b><small>Editor de fotos por lote</small></div></div>
   <div class="top-actions">
-    <button class="btn ghost" id="btn-install" hidden title="Instalarlo en la compu, con ícono propio">⊕ Instalar</button>
+    <button class="btn ghost" id="btn-install" data-install hidden title="Instalarlo en la compu, con ícono propio">⊕ Instalar</button>
     <button class="btn ghost" id="btn-backup" title="Copia de seguridad de tus ediciones">💾 Copia de ajustes</button>
     <button class="btn" id="btn-resume" hidden title="Vuelve a abrir la última carpeta con tus fotos, el orden y las ediciones">↺ Continuar última sesión</button>
     <button class="btn" id="btn-folder">📁 Abrir carpeta</button>
@@ -210,6 +223,9 @@
 </div>
 <div class="toast" id="toast"></div>
 
-<script type="module" src="js/app.js"></script>
+</div>
+<noscript>Activa JavaScript para ingresar a Revelado DC.</noscript>
+<script type="module" src="js/bootstrap.js"></script>
 </body>
 </html>
+
