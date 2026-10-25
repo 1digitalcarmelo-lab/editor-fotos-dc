@@ -2,7 +2,7 @@
 begin;
 
 insert into public.products(product_slug,public_name,short_description,app_url,category,is_active,display_order,allows_trial,default_free_usage,allows_free)
-select 'editor-fotos-dc','Revelado DC','Editor de fotos por lote con procesamiento local.','https://editor-fotos-dc.netlify.app/',category,true,110,false,0,false
+select 'editor-fotos-dc','Revelado DC','Editor de fotos por lote con procesamiento local.','https://editor-dc.digitalcarmelo.com/',category,true,110,false,0,false
 from public.products where product_slug='generador-invitaciones'
 on conflict (product_slug) do nothing;
 

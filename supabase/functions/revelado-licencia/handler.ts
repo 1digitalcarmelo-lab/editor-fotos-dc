@@ -1,6 +1,6 @@
 const PRODUCT = 'editor-fotos-dc';
 const FULL = new Set(['product_full','bundle_full','suite_full']);
-const allowedOrigin = (origin: string) => /^https:\/\/(editor-fotos-dc\.netlify\.app|(?:deploy-preview-\d+|[a-f0-9]{24})--editor-fotos-dc\.netlify\.app)$/.test(origin);
+const allowedOrigin = (origin: string) => /^https:\/\/(editor-dc\.digitalcarmelo\.com|editor-fotos-dc\.netlify\.app|(?:deploy-preview-\d+|[a-f0-9]{24})--editor-fotos-dc\.netlify\.app)$/.test(origin);
 type Config = { url: string; publicKey: string; secretKey: string; createClient: (...args: any[]) => any };
 
 export async function handleLicense(req: Request, config: Config) {

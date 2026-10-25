@@ -684,7 +684,7 @@ const auth = createProductAuth({
   onAuthorized,
   supabase,
   productSlug: "editor-fotos-dc",
-  returnUrl: "https://editor-fotos-dc.netlify.app/",
+  returnUrl: "https://editor-dc.digitalcarmelo.com/",
   authTitle: "Revelado DC",
   whatsappUrl: "https://wa.me/5491176508119?text=" + encodeURIComponent("Hola Digital Carmelo, quiero conocer las opciones de Revelado DC."),
   injectStyles,

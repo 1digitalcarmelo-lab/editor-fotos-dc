@@ -7,7 +7,7 @@ El editor conserva instalación, modelos locales, originales, ajustes, presets, 
 1. En el mismo proyecto Supabase de la Suite (`rkkulnehklzqqmffvaqz`), ejecutar completo `supabase/migrations/20261025200640_revelado_device_license.sql`. Crea el producto `editor-fotos-dc`, una tabla con RLS y la RPC exclusiva del servidor. No modifica Armador ni concede una cortesía.
 2. Crear una Edge Function con el **slug real** `revelado-licencia`. El nombre visible no cambia la URL. Agregar los dos archivos `index.ts` y `handler.ts` de `supabase/functions/revelado-licencia/` y mantener **Verify JWT with legacy secret** activado, igual que Armador. La URL debe terminar en `/functions/v1/revelado-licencia`.
 3. Las claves se leen de las variables administradas por Supabase: `SUPABASE_PUBLISHABLE_KEYS`/`SUPABASE_SECRET_KEYS`, o las variables heredadas `SUPABASE_ANON_KEY`/`SUPABASE_SERVICE_ROLE_KEY`. No pegarlas en JavaScript público ni en el repositorio.
-4. En Auth → URL Configuration permitir `https://editor-fotos-dc.netlify.app/` como redirect de confirmación y recuperación. El frontend vuelve al sitio oficial. La función admite ese origen, Deploy Previews y los enlaces de despliegue de este proyecto. Si se agrega un dominio propio, cambiar también returnUrl, CORS, Open Graph, catálogo y redirect de Auth.
+4. En Auth → URL Configuration permitir `https://editor-dc.digitalcarmelo.com/` como redirect de confirmación y recuperación. El frontend vuelve al sitio oficial. La función admite ese origen, `https://editor-fotos-dc.netlify.app`, Deploy Previews y los enlaces de despliegue de este proyecto. Si se agrega un dominio propio, cambiar también returnUrl, CORS, Open Graph, catálogo y redirect de Auth.
 5. Conceder el acceso temporal del cliente antes de probarlo. Para la cortesía existente, añadir este producto al combo solo después de confirmar su titular y vigencia. Mantener las tres herramientas y la fecha de finalización actuales. No ejecutar una concesión general a todos los usuarios ni usar un plan ilimitado para un mes de cortesía. Esta rama no concede el acceso ni altera los permisos actuales.
 6. Abrir el Deploy Preview con una cuenta completa. Netlify debe usar `node scripts/prepare-publish.mjs` y publicar `dist`; la configuración está en `netlify.toml`. No publicar la raíz, porque contiene backend y pruebas.
 
@@ -54,3 +54,7 @@ Herramientas de prueba: esbuild 0.25.12, @electric-sql/pglite 0.5.11, Playwright
 ## Volver atrás
 
 Si falla antes del merge, no publicarlo. Si falla tras publicarlo, desplegar una revisión correctiva o una pantalla de mantenimiento con acceso cerrado. Restaurar el deploy público anterior volvería a abrir el editor sin login: **no es un rollback seguro del acceso**. Conservar las bases locales y la tabla de activaciones, sin borrar fotos ni ajustes. La migración puede ejecutarse nuevamente; no elimina datos y no modifica las licencias de Armador.
+
+## Otro PR abierto
+
+El PR #1 de Claude añade avisos de compatibilidad e instalación y protección al cerrar. Comparte `index.html`, `js/app.js` y `sw.js` con este PR. No mergear ambos sin integrar esos bloques: la instalación ahora se gestiona en `js/pwa.js`, y el worker nuevo debe conservar el acceso en línea. Los avisos de Claude se pueden mantener adaptándolos al nuevo arranque. No se modificó ni cerró su PR.
