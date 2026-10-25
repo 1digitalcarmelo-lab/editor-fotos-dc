@@ -1,0 +1,3 @@
+[functions.revelado-licencia]
+verify_jwt = true
+

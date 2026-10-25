@@ -2,6 +2,7 @@
 import { Engine, DEFAULTS, freshSettings, frameSize, outSize, fitPan, fitPanGrow, ensurePan } from './engine.js';
 import { readExif, withExif, orientationCss } from './exif.js';
 import * as store from './store.js';
+import { preferenceKey, requireLicense } from './session.js';
 import { EYES_VERSION, faceState, closedCount, applyEyePatches } from './eyes.js';
 
 const $ = (id) => document.getElementById(id);
@@ -135,6 +136,7 @@ function pick(s, keys) { const o = {}; for (const k of keys) o[k] = structuredCl
 
 // ---------------------------------------------------------------- abrir fotos
 async function openFolder() {
+  document.getElementById('dc-account-close')?.click();
   if (!window.showDirectoryPicker) { $('file-input').click(); return; }
   toast('Elegí la CARPETA de las fotos y tocá "Seleccionar carpeta". En esa ventana las fotos no se ven: es normal.', 6000);
   try {
@@ -626,6 +628,8 @@ function drawHisto() {
   ctx.fillStyle = clipLo > 0.01 ? '#6b9bff' : 'rgba(255,255,255,.15)'; ctx.fillRect(2, 2, 6, 6);
 }
 window.addEventListener('resize', draw);
+// La barra de cuenta puede cambiar el ancho sin redimensionar la ventana.
+new ResizeObserver(draw).observe($('viewport'));
 let panDrag = null;
 // Zoom de inspección: acerca hacia donde está el mouse, sin deformar. Al acercar se usa la foto en
 // resolución completa (para ver de verdad si algo está fuera de foco); al volver a 100 % se libera.
@@ -1129,7 +1133,7 @@ function analyze(img, mode = 'natural') {
 }
 const AUTO_MODES = { natural: 'Natural', vivo: 'Vivo', suave: 'Suave' };
 let autoMode = 'natural';
-try { autoMode = localStorage.getItem('revelado-auto-mode') || 'natural'; } catch { /* sin almacenamiento */ }
+try { autoMode = localStorage.getItem(preferenceKey('revelado-auto-mode')) || 'natural'; } catch { /* sin almacenamiento */ }
 if (!AUTO_MODES[autoMode]) autoMode = 'natural';
 const STYLE_KEYS = ['con', 'vib', 'sat', 'cla', 'sharp', 'vig', 'bw'];
 
@@ -1514,7 +1518,7 @@ $('btn-before').addEventListener('pointerdown', () => setBefore(true));
 for (const ev of ['pointerup', 'pointerleave', 'pointercancel']) $('btn-before').addEventListener(ev, () => state.before && setBefore(false));
 
 // ---------------------------------------------------------------- exportar
-function modal(html) { $('modal-card').innerHTML = html; $('modal').hidden = false; }
+function modal(html) { document.getElementById('dc-account-close')?.click(); $('modal-card').innerHTML = html; $('modal').hidden = false; }
 function closeModal() { $('modal').hidden = true; }
 $('modal').addEventListener('click', (e) => { if (e.target.id === 'modal' || e.target.closest('[data-close]')) { if (!exporting) closeModal(); } });
 
@@ -1570,7 +1574,7 @@ function seqNames(base, start, n) {
 }
 function exportNaming() {
   let v = {};
-  try { v = JSON.parse(localStorage.getItem('revelado-export-names') || '{}'); } catch { /* sin almacenamiento */ }
+  try { v = JSON.parse(localStorage.getItem(preferenceKey('revelado-export-names')) || '{}'); } catch { /* sin almacenamiento */ }
   return { mode: ['same', 'suffix', 'seq'].includes(v.mode) ? v.mode : 'same', base: typeof v.base === 'string' ? v.base : 'FIL_', start: Number.isFinite(v.start) ? v.start : 1 };
 }
 
@@ -1584,7 +1588,7 @@ async function runExport() {
   if (!list.length) return;
   const seqBase = $('seq-base').value, seqStart = Math.max(0, Math.floor(+$('seq-start').value || 0));
   const seq = nmMode === 'seq' ? seqNames(seqBase, seqStart, list.length) : null;
-  try { localStorage.setItem('revelado-export-names', JSON.stringify({ mode: nmMode, base: seqBase, start: seqStart })); } catch { /* nada */ }
+  try { localStorage.setItem(preferenceKey('revelado-export-names'), JSON.stringify({ mode: nmMode, base: seqBase, start: seqStart })); } catch { /* nada */ }
   let outDir = null;
   if (window.showDirectoryPicker) {
     try { outDir = await window.showDirectoryPicker({ id: 'revelado-export', mode: 'readwrite', startIn: 'pictures' }); }
@@ -1594,6 +1598,7 @@ async function runExport() {
       toast('Elegiste la misma carpeta de las originales: las nuevas se guardan con "-editada" para no pisarlas.', 5000);
     }
   }
+  if (!await requireLicense(true)) return;
   exporting = true; cancelExport = false;
   $('exp-progress').hidden = false;
   $('exp-actions').innerHTML = '<button class="btn ghost" id="exp-cancel">Detener</button>';
@@ -1605,6 +1610,7 @@ async function runExport() {
   const usedNames = new Set(); // nombres ya usados en esta exportación (duplicados no se pisan)
   const flushZip = async () => {
     if (!zip.length) return;
+    if (!await requireLicense()) { cancelExport = true; zip = []; return; }
     const { zipSync } = await import('./vendor/fflate.js');
     const files = {};
     for (const [name, blob] of zip) files[name] = [new Uint8Array(await blob.arrayBuffer()), { level: 0 }];
@@ -1615,6 +1621,7 @@ async function runExport() {
   };
   for (const [idx, p] of list.entries()) {
     if (cancelExport) break;
+    if (!await requireLicense()) { cancelExport = true; break; }
     try {
       let bmp = await sourceBitmap(p);
       if (Math.max(bmp.width, bmp.height) > exp.maxTex) {
@@ -1637,6 +1644,7 @@ async function runExport() {
          while (await outDir.getFileHandle(name).then(() => true).catch(() => false)) name = `${base}-${n++}.jpg`;
        }
        usedNames.add(name);
+      if (!await requireLicense()) { cancelExport = true; break; }
       if (outDir) {
         const fh = await outDir.getFileHandle(name, { create: true });
         const w = await fh.createWritable(); await w.write(blob); await w.close();
@@ -1650,7 +1658,7 @@ async function runExport() {
     $('exp-bar').style.width = (done / list.length * 100) + '%';
     $('exp-text').textContent = `${done} de ${list.length} · ${p.name}` + (list.length - done ? ` · faltan ~${left > 90 ? Math.round(left/60) + ' min' : Math.round(left) + ' s'}` : '');
   }
-  if (!outDir) await flushZip();
+  if (!outDir && !cancelExport) await flushZip();
   exp.release();
   exporting = false;
   $('exp-text').textContent = cancelExport ? `Exportación detenida: ${done - failed.length} fotos guardadas.`
@@ -1837,6 +1845,7 @@ $('btn-eyes-clear').addEventListener('click', () => { change((s) => { s.eyePatch
 for (const id of ['btn-folder', 'btn-folder-2']) $(id).addEventListener('click', openFolder);
 // Con showOpenFilePicker quedan referencias (handles) a cada archivo y la sesión se puede reabrir.
 async function pickFiles() {
+  document.getElementById('dc-account-close')?.click();
   if (!window.showOpenFilePicker) { $('file-input').click(); return; }
   try {
     const hs = await window.showOpenFilePicker({ multiple: true, id: 'revelado-fotos', excludeAcceptAllOption: false,
@@ -1854,7 +1863,7 @@ $('btn-next').addEventListener('click', () => selectPhoto(state.cur + 1));
 $('btn-auto').addEventListener('click', autoTone);
 $('auto-mode').value = autoMode;
 $('auto-mode').addEventListener('change', (e) => {
-  autoMode = e.target.value; try { localStorage.setItem('revelado-auto-mode', autoMode); } catch { /* nada */ }
+  autoMode = e.target.value; try { localStorage.setItem(preferenceKey('revelado-auto-mode'), autoMode); } catch { /* nada */ }
   e.target.blur();
 });
 $('btn-auto-batch').addEventListener('click', autoBatch);
@@ -1974,22 +1983,5 @@ loadPresets();
 })();
 window.__revelado = { state, engine, loadFromDir }; // para pruebas automáticas
 
-// Instalar como programa (Chrome / Edge: ícono ⊕ en la barra de direcciones)
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').then((reg) => {
-  reg.update();
-  reg.addEventListener('updatefound', () => {
-    const worker = reg.installing; if (!worker) return;
-    worker.addEventListener('statechange', () => {
-      if (worker.state === 'installed' && navigator.serviceWorker.controller) {
-        toast('Hay una actualización de Revelado DC. Recargá para usarla.', 7000);
-      }
-    });
-  });
-}).catch(() => {});
-let installEvt = null;
-window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt = e; $('btn-install').hidden = false; });
-$('btn-install').addEventListener('click', async () => {
-  if (!installEvt) return;
-  installEvt.prompt(); await installEvt.userChoice; installEvt = null; $('btn-install').hidden = true;
-});
-window.addEventListener('appinstalled', () => toast('¡Listo! Revelado DC quedó instalado en tu compu'));
+// La instalación y la verificación de acceso se inicializan en bootstrap.js.
+
