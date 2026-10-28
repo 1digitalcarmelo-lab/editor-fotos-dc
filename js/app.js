@@ -491,6 +491,7 @@ function refreshStrip() {
   $('sel-info').textContent = n > 1 ? `${n} fotos seleccionadas.` : 'Seleccioná varias en la tira de abajo (Ctrl o Shift + clic).';
   $('btn-sync').disabled = n < 2;
   $('btn-paste').disabled = !state.clip;
+  $('btn-clear-adj').textContent = n > 1 ? `Quitar ajustes (${n})` : 'Quitar ajustes';
 }
 
 $('thumbs').addEventListener('click', (e) => {
@@ -1371,6 +1372,26 @@ function applyToSelection(src) {
   syncSliders(); draw(); refreshStrip();
   toast(`Ajustes aplicados a ${n} foto${n === 1 ? '' : 's'}`);
 }
+// Quitar ajustes: lo contrario de Pegar. Saca lo mismo que Pegar aplica (tono, preset y, según las casillas,
+// máscaras y recorte) y deja intactos los arreglos puntuales (ojos, ojos rojos).
+function clearSelection() {
+  const fresh = freshSettings();
+  const keys = [...TONE_KEYS, 'preset'];
+  if ($('chk-sync-masks').checked) keys.push('masks');
+  if ($('chk-sync-crop').checked) keys.push(...GEO_KEYS);
+  const targets = state.sel.size ? [...state.sel] : [state.cur];
+  if (targets.length > 1 && !confirm(`¿Quitar los ajustes de las ${targets.length} fotos seleccionadas? Vuelven a como salieron de la cámara.`)) return;
+  let n = 0;
+  for (const i of targets) {
+    const p = state.photos[i]; if (!p) continue;
+    p.hist.push(structuredClone(p.s));
+    for (const k of keys) { if (k in fresh) p.s[k] = structuredClone(fresh[k]); else delete p.s[k]; }
+    save(p); n++;
+  }
+  syncSliders(); draw(); refreshStrip();
+  toast(n === 1 ? 'Ajustes quitados. Si te arrepentís: Deshacer (Ctrl+Z).' : `Ajustes quitados de ${n} fotos`, 3200);
+}
+$('btn-clear-adj').addEventListener('click', clearSelection);
 $('btn-copy').addEventListener('click', copySettings);
 $('btn-paste').addEventListener('click', () => state.clip && applyToSelection(state.clip));
 $('btn-sync').addEventListener('click', () => { const p = cur(); if (p) applyToSelection(p.s); });
