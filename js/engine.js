@@ -157,7 +157,7 @@ export const DEFAULTS = Object.freeze({
   cla: 0, sharp: 0, vig: 0, bw: false,
   dehaze: 0, noise: 0, distortion: 0, fisheye: 0, redEyes: [],
   fade: 0, shH: 0, shS: 0, hiH: 0, hiS: 0,
-  rot: 0, ang: 0, crop: { x: 0, y: 0, w: 1, h: 1 }, aspect: 'libre', masks: [],
+  rot: 0, ang: 0, crop: { x: 0, y: 0, w: 1, h: 1 }, aspect: 'orig', masks: [],
   pan: { x: 0, y: 0 }, fill: 0, persH: 0, persV: 0, eyePatches: [],
   preset: null, // { id, name, sig }: qué preset se aplicó y cómo quedaron los ajustes en ese momento
 });

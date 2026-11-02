@@ -782,8 +782,8 @@ function syncSliders() {
   $('chk-bw').checked = !!p.s.bw;
   $('btn-eyes-clear').hidden = !p.s.eyePatches?.length;
   updatePresetSelect();
-  $('aspect-select').value = p.s.aspect === '7:5' ? 'p15x21' : (p.s.aspect || 'libre');
-  if (!$('aspect-select').value) $('aspect-select').value = 'libre';
+  $('aspect-select').value = p.s.aspect === '7:5' ? 'p15x21' : (p.s.aspect || 'orig');
+  if (!$('aspect-select').value) $('aspect-select').value = 'orig';
   renderMasks();
 }
 
@@ -1407,7 +1407,7 @@ $('btn-sel-edited').addEventListener('click', () => {
 // Copias: tamaño de papel en cm (lado corto × lado largo). Se acomodan a la orientación de la foto.
 const PAPER = { p10x15: [10, 15], p13x18: [13, 18], p15x21: [15, 21], p20x25: [20, 25] };
 function aspectRatio(s) {
-  const a = s.aspect || 'libre';
+  const a = s.aspect || 'orig';
   if (a === 'libre') return null;
   const [Wf, Hf] = frameSize(engine.w, engine.h, s.rot);
   if (a === 'orig') return Wf / Hf;
