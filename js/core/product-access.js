@@ -12,6 +12,9 @@ export function canAccessProduct(access, { allowFree = false } = {}) {
 
 export async function getProductAccess(client, productSlug) {
   const params = { p_product_slug: productSlug };
+  // dc_open_product_access = v2 + arranca la prueba de 30 días la primera vez que se abre la herramienta.
+  const opened = await client.rpc('dc_open_product_access', params);
+  if (opened.error?.code !== 'PGRST202') return opened;
   const result = await client.rpc('get_my_product_access_v2', params);
   // Compatibilidad solo si V2 no existe en el esquema. Errores de permiso,
   // red o servidor se devuelven tal cual, sin intentar otro camino de acceso.
