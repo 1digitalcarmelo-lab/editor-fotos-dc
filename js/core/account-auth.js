@@ -173,6 +173,7 @@ function authScreen({
 >
   ← Volver a la Suite
 </a>
+<p class="dc-firma" style="text-align:center;font-size:12px;line-height:1.5;opacity:.75;margin:18px 0 0">© 2026 · Desarrollado por <a href="https://digitalcarmelo.com/" target="_blank" rel="noopener noreferrer" style="font-weight:700;color:inherit;text-decoration:none">Digital Carmelo ♥</a> · by Caro Castro · Todos los derechos reservados.</p>
 
       </div>
     </div>
